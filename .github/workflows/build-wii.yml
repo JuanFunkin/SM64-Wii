@@ -63,7 +63,7 @@ jobs:
               echo "El parche ya estaba aplicado a mano."; echo "$PSHA" > "$MARK"
             elif [ -f "$W/src/pc/wii/wii_main.c" ]; then
               echo "Parche nuevo: reconstruyendo desde el codigo original..."
-              B=$(fetch_base); apply "$B"; cp -a "$B"/. "$W"/; echo "$PSHA" > "$MARK"
+              B=$(fetch_base); apply "$B"; cp -a "$B"/. "$W"/; rm -f "$W/README_WII.md"; echo "$PSHA" > "$MARK"
             else
               echo "Aplicando parche Wii sobre el codigo de la raiz..."
               apply "$W"; echo "$PSHA" > "$MARK"
