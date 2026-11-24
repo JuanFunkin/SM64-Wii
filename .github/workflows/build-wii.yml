@@ -1,0 +1,76 @@
+name: Build SM64 Wii (homebrew)
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitppc:latest      # devkitPPC + libogc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias
+        run: |
+          apt-get update
+          apt-get install -y build-essential python3 zip unzip git
+
+      # Busca el codigo del sm64-port: en la raiz del repo, en una subcarpeta,
+      # dentro de un .zip subido al repo, o (si no hay nada) lo descarga de GitHub.
+      - name: Preparar codigo fuente del sm64-port
+        run: |
+          set -e
+          W="$GITHUB_WORKSPACE"
+          SRC=""
+          if [ -f "$W/Makefile" ] && [ -d "$W/src/game" ]; then SRC="$W"; fi
+          if [ -z "$SRC" ]; then
+            for d in "$W"/*/; do
+              if [ -f "${d}Makefile" ] && [ -d "${d}src/game" ]; then SRC="${d%/}"; break; fi
+            done
+          fi
+          if [ -z "$SRC" ]; then
+            Z=$(ls "$W"/*.zip 2>/dev/null | head -1 || true)
+            if [ -n "$Z" ]; then
+              mkdir -p "$W/_src"
+              unzip -q "$Z" -d "$W/_src"
+              SRC=$(find "$W/_src" -maxdepth 2 -name Makefile -printf '%h\n' | head -1)
+            fi
+          fi
+          if [ -z "$SRC" ]; then
+            git clone --depth 1 https://github.com/sm64-port/sm64-port.git "$W/_src"
+            SRC="$W/_src"
+          fi
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          echo "Codigo fuente en: $SRC"
+
+      - name: Aplicar parche Wii (sm64-wii.patch)
+        working-directory: ${{ env.SRC }}
+        run: |
+          git config --global --add safe.directory '*'
+          if [ -f src/pc/wii/wii_main.c ]; then
+            echo "El parche ya estaba aplicado."
+          else
+            git apply --ignore-whitespace --whitespace=nowarn "$GITHUB_WORKSPACE/sm64-wii.patch"
+          fi
+
+      - name: Compilar (no necesita la ROM)
+        working-directory: ${{ env.SRC }}
+        run: make -j"$(nproc)" TARGET_WII=1 VERSION=us
+
+      - name: Empaquetar apps/sm64wii
+        working-directory: ${{ env.SRC }}
+        run: |
+          D=dist/apps/sm64wii
+          mkdir -p $D/sm64 $D/extracted $D/saves
+          cp build/us_wii/boot.dol build/us_wii/assets.tbl $D/
+          cp wii/meta.xml $D/
+          echo "Pon aqui tu ROM de Super Mario 64 (US), .z64/.v64/.n64, con cualquier nombre." > $D/sm64/LEEME.txt
+          cd dist && zip -r ../sm64wii.zip apps
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sm64wii
+          path: ${{ env.SRC }}/sm64wii.zip
