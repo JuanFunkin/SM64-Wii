@@ -1066,16 +1066,17 @@ index 0000000..f180d63
 +struct AudioAPI audio_wii = { wii_audio_init, wii_audio_buffered, wii_audio_desired, wii_audio_play };
 diff --git a/src/pc/wii/wii_gfx.c b/src/pc/wii/wii_gfx.c
 new file mode 100644
-index 0000000..8d6c4f3
+index 0000000..1a89db9
 --- /dev/null
 +++ b/src/pc/wii/wii_gfx.c
-@@ -0,0 +1,503 @@
+@@ -0,0 +1,504 @@
 +/* Backend de video GX (Wii) para el sm64-port.
 + * gfx_pc.c entrega vertices ya transformados a espacio "clip" (x,y,z,w).  Aqui los pasamos a GX como
 + * (x, y, -w) con una proyeccion perspectiva personalizada (w' = -z) para que GX haga la division por w,
 + * la correccion de perspectiva de texturas y el z-buffer.  Las llamadas 2D (w == 1) usan proyeccion ortografica.
 + * El combinador de color N64 se traduce a etapas TEV. */
 +#include <gccore.h>
++#include <ogc/lwp_watchdog.h>
 +#include <malloc.h>
 +#include <math.h>
 +#include <stdio.h>
