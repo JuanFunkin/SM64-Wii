@@ -3,6 +3,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write          # para subir el codigo ya con los cambios al repositorio
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,52 +28,80 @@ jobs:
           echo "DEVKITPPC=$DK/devkitPPC" >> "$GITHUB_ENV"
           echo "$DK/devkitPPC/bin" >> "$GITHUB_PATH"
           echo "$DK/tools/bin" >> "$GITHUB_PATH"
-          ls "$DK" || true
-          ls "$DK/devkitPPC/bin" | head -5 || true
 
-      # Busca el codigo del sm64-port: en la raiz del repo, en una subcarpeta,
-      # dentro de un .zip subido al repo, o (si no hay nada) lo descarga de GitHub.
-      - name: Preparar codigo fuente del sm64-port
+      # Deja en la RAIZ del repo el codigo del sm64-port con el parche Wii aplicado (visible y con fork).
+      # Origen del codigo original: raiz del repo, un .zip subido al repo, o GitHub si no hay nada.
+      # Si subes un sm64-wii.patch nuevo, se reconstruye desde el original y se vuelve a subir.
+      - name: Preparar codigo (sm64-port + parche Wii)
         run: |
           set -e
+          git config --global --add safe.directory '*'
           W="$GITHUB_WORKSPACE"
+          P="$W/sm64-wii.patch"
+          PSHA=$(sha256sum "$P" | cut -d' ' -f1)
+          MARK="$W/.wii-patch.sha"
+          apply() { (cd "$1" && git apply --ignore-whitespace --whitespace=nowarn "$P"); }
+          fetch_base() {   # sm64-port original en un directorio temporal fuera del repo
+            T=$(mktemp -d)
+            Z=$(ls "$W"/*.zip 2>/dev/null | head -1 || true)
+            if [ -n "$Z" ]; then
+              unzip -q "$Z" -d "$T"
+              B=$(find "$T" -maxdepth 2 -name Makefile -printf '%h\n' | head -1)
+            else
+              git clone -q --depth 1 https://github.com/sm64-port/sm64-port.git "$T/base"
+              B="$T/base"
+            fi
+            rm -rf "$B/.git" "$B/.github"
+            echo "$B"
+          }
           SRC=""
-          if [ -f "$W/Makefile" ] && [ -d "$W/src/game" ]; then SRC="$W"; fi
-          if [ -z "$SRC" ]; then
+          if [ -f "$W/Makefile" ] && [ -d "$W/src/game" ]; then
+            SRC="$W"
+            if [ -f "$MARK" ] && [ "$(cat "$MARK")" = "$PSHA" ]; then
+              echo "El parche Wii ya esta aplicado y al dia."
+            elif [ -f "$W/src/pc/wii/wii_main.c" ] && [ ! -f "$MARK" ]; then
+              echo "El parche ya estaba aplicado a mano."; echo "$PSHA" > "$MARK"
+            elif [ -f "$W/src/pc/wii/wii_main.c" ]; then
+              echo "Parche nuevo: reconstruyendo desde el codigo original..."
+              B=$(fetch_base); apply "$B"; cp -a "$B"/. "$W"/; echo "$PSHA" > "$MARK"
+            else
+              echo "Aplicando parche Wii sobre el codigo de la raiz..."
+              apply "$W"; echo "$PSHA" > "$MARK"
+            fi
+          else
             for d in "$W"/*/; do
               if [ -f "${d}Makefile" ] && [ -d "${d}src/game" ]; then SRC="${d%/}"; break; fi
             done
-          fi
-          if [ -z "$SRC" ]; then
-            Z=$(ls "$W"/*.zip 2>/dev/null | head -1 || true)
-            if [ -n "$Z" ]; then
-              mkdir -p "$W/_src"
-              unzip -q "$Z" -d "$W/_src"
-              SRC=$(find "$W/_src" -maxdepth 2 -name Makefile -printf '%h\n' | head -1)
+            if [ -n "$SRC" ]; then
+              [ -f "$SRC/src/pc/wii/wii_main.c" ] || apply "$SRC"
+            else
+              echo "Llevando el codigo del sm64-port a la raiz del repo..."
+              B=$(fetch_base); apply "$B"; cp -a "$B"/. "$W"/; echo "$PSHA" > "$MARK"
+              SRC="$W"
             fi
-          fi
-          if [ -z "$SRC" ]; then
-            git clone --depth 1 https://github.com/sm64-port/sm64-port.git "$W/_src"
-            SRC="$W/_src"
           fi
           echo "SRC=$SRC" >> "$GITHUB_ENV"
           echo "Codigo fuente en: $SRC"
 
-      - name: Aplicar parche Wii (sm64-wii.patch)
-        working-directory: ${{ env.SRC }}
+      # Sube el codigo (con el parche ya aplicado) al repositorio para que se vea y se pueda hacer fork.
+      - name: Subir el codigo al repositorio
+        continue-on-error: true
         run: |
-          git config --global --add safe.directory '*'
-          if [ -f src/pc/wii/wii_main.c ]; then
-            echo "El parche ya estaba aplicado."
+          cd "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No hay cambios que subir."
           else
-            git apply --ignore-whitespace --whitespace=nowarn "$GITHUB_WORKSPACE/sm64-wii.patch"
+            git commit -qm "Add sm64-port source with the Wii port applied"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
       - name: Compilar (no necesita la ROM)
         working-directory: ${{ env.SRC }}
         run: |
           which powerpc-eabi-gcc elf2dol
-          powerpc-eabi-gcc --version | head -1
           make -j"$(nproc)" TARGET_WII=1 VERSION=us
 
       - name: Empaquetar apps/sm64wii
@@ -79,7 +110,7 @@ jobs:
           D=dist/apps/sm64wii
           mkdir -p $D/sm64 $D/extracted $D/saves
           cp build/us_wii/boot.dol build/us_wii/assets.tbl $D/
-          cp wii/meta.xml $D/
+          cp wii/meta.xml wii/icon.png $D/
           echo "Pon aqui tu ROM de Super Mario 64 (US), .z64/.v64/.n64, con cualquier nombre." > $D/sm64/LEEME.txt
           cd dist && zip -r ../sm64wii.zip apps
 
