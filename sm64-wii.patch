@@ -988,10 +988,10 @@ index 0000000..5672c29
 +#endif
 diff --git a/src/pc/wii/wii_audio.c b/src/pc/wii/wii_audio.c
 new file mode 100644
-index 0000000..49da5c8
+index 0000000..f180d63
 --- /dev/null
 +++ b/src/pc/wii/wii_audio.c
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,72 @@
 +/* Audio Wii (AESND).  El juego produce PCM estereo s16 a 32 kHz; lo guardamos en un anillo y AESND lo consume. */
 +#include <gccore.h>
 +#include <aesndlib.h>
@@ -1010,8 +1010,7 @@ index 0000000..49da5c8
 +
 +static uint32_t fill(void) { return wr - rd; }
 +
-+static void voice_cb(AESNDPB *pb, uint32_t state, void *arg) {
-+    (void) arg;
++static void voice_cb(AESNDPB *pb, uint32_t state) {
 +    if (state != VOICE_STATE_STREAM) return;
 +    int16_t *out = (int16_t *) dma[cur];
 +    uint32_t avail = fill();
