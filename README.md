@@ -1,88 +1,121 @@
-# Super Mario 64 Port
+# Super Mario 64 for Wii (homebrew)
 
-- This repo contains a full decompilation of Super Mario 64 (J), (U), (E), and (SH).
-- Naming and documentation of the source code and data structures are in progress.
-- Beyond Nintendo 64, it can also target Linux and Windows natively.
+A native **Nintendo Wii** homebrew port of Super Mario 64, built on top of the
+[sm64-port](https://github.com/sm64-port/sm64-port) project (itself based on the
+[n64decomp/sm64](https://github.com/n64decomp/sm64) decompilation).
 
-This repo does not include all assets necessary for compiling the game.
-A prior copy of the game is required to extract the assets.
+> **Status: experimental / work in progress.** Expect bugs. Bug reports and pull requests are welcome.
 
-## Building native executables
+## Features
 
-### Linux
+- Runs natively on the Wii (PowerPC, GX video, AESND audio) as a Homebrew Channel app.
+- **2-player co-op** on one screen: Player 2 is a green Mario.
+  - There is a single camera that follows Player 1.
+  - If Player 2 gets too far away, falls into a pit or dies, they are teleported back to Player 1.
+  - Player 2 can collect stars (the level ends for both players), open doors, use warps/pipes and paintings, just like Player 1.
+  - Stars, coins, keys and lives are shared.
+- **Full-screen widescreen**: fills 16:9 TVs without black bars and without stretching (the field of view is widened instead).
+- **No assets are included.** On first launch the app reads *your own* ROM and extracts what it needs into the `extracted` folder, showing a progress bar. Later launches just load the extracted data.
+- Save files are stored in the `saves` folder.
+- English and Spanish interface (follows the Wii system language, see [Language](#language)).
 
-1. Install prerequisites (Ubuntu): `sudo apt install -y git build-essential pkg-config libusb-1.0-0-dev libsdl2-dev`.
-2. Clone the repo: `git clone https://github.com/sm64-port/sm64-port.git`, which will create a directory `sm64-port` and then **enter** it `cd sm64-port`.
-3. Place a Super Mario 64 ROM called `baserom.<VERSION>.z64` into the repository's root directory for asset extraction, where `VERSION` can be `us`, `jp`, or `eu`.
-4. Run `make` to build. Qualify the version through `make VERSION=<VERSION>`. Add `-j4` to improve build speed (hardware dependent based on the amount of CPU cores available).
-5. The executable binary will be located at `build/<VERSION>_pc/sm64.<VERSION>.f3dex2e`.
+## Legal notice
 
-### Windows
+This repository contains **no Nintendo ROM, assets or copyrighted game data**. You must provide
+your own legally obtained copy of the **US (NTSC-U)** version of Super Mario 64.
+This project is not affiliated with or endorsed by Nintendo.
 
-1. Install and update MSYS2, following all the directions listed on https://www.msys2.org/.
-2. From the start menu, launch MSYS2 MinGW and install required packages depending on your machine (do **NOT** launch "MSYS2 MSYS"):
-  * 64-bit: Launch "MSYS2 MinGW 64-bit" and install: `pacman -S git make python3 mingw-w64-x86_64-gcc`
-  * 32-bit (will also work on 64-bit machines): Launch "MSYS2 MinGW 32-bit" and install: `pacman -S git make python3 mingw-w64-i686-gcc`
-  * Do **NOT** by mistake install the package called simply `gcc`.
-3. The MSYS2 terminal has a _current working directory_ that initially is `C:\msys64\home\<username>` (home directory). At the prompt, you will see the current working directory in yellow. `~` is an alias for the home directory. You can change the current working directory to `My Documents` by entering `cd /c/Users/<username>/Documents`.
-4. Clone the repo: `git clone https://github.com/sm64-port/sm64-port.git`, which will create a directory `sm64-port` and then **enter** it `cd sm64-port`.
-5. Place a *Super Mario 64* ROM called `baserom.<VERSION>.z64` into the repository's root directory for asset extraction, where `VERSION` can be `us`, `jp`, or `eu`.
-6. Run `make` to build. Qualify the version through `make VERSION=<VERSION>`. Add `-j4` to improve build speed (hardware dependent based on the amount of CPU cores available).
-7. The executable binary will be located at `build/<VERSION>_pc/sm64.<VERSION>.f3dex2e.exe` inside the repository.
+## Installation
 
-#### Troubleshooting
+1. Download `sm64wii.zip` from the latest successful run of the **Build SM64 Wii (homebrew)** workflow
+   (GitHub → Actions → open the run → *Artifacts*).
+2. Unzip it and copy the `apps/sm64wii` folder to the `apps` folder at the root of your SD card (or USB drive).
+3. Put your US ROM in `apps/sm64wii/sm64/`. Any file name works, and `.z64`, `.v64` and `.n64` are all accepted (the ROM must be 8 MB).
+4. Launch **Super Mario 64 Wii** from the Homebrew Channel.
 
-1. If you get `make: gcc: command not found` or `make: gcc: No such file or directory` although the packages did successfully install, you probably launched the wrong MSYS2. Read the instructions again. The terminal prompt should contain "MINGW32" or "MINGW64" in purple text, and **NOT** "MSYS".
-2. If you get `Failed to open baserom.us.z64!` you failed to place the baserom in the repository. You can write `ls` to list the files in the current working directory. If you are in the `sm64-port` directory, make sure you see it here.
-3. If you get `make: *** No targets specified and no makefile found. Stop.`, you are not in the correct directory. Make sure the yellow text in the terminal ends with `sm64-port`. Use `cd <dir>` to enter the correct directory. If you write `ls` you should see all the project files, including `Makefile` if everything is correct.
-4. If you get any error, be sure MSYS2 packages are up to date by executing `pacman -Syu` and `pacman -Su`. If the MSYS2 window closes immediately after opening it, restart your computer.
-5. When you execute `gcc -v`, be sure you see `Target: i686-w64-mingw32` or `Target: x86_64-w64-mingw32`. If you see `Target: x86_64-pc-msys`, you either opened the wrong MSYS start menu entry or installed the incorrect gcc package.
-6. When switching between building for other platforms, run `make -C tools clean` first to allow for the tools to recompile on the new platform. This also helps when switching between shells like WSL and MSYS2.
+Resulting layout:
 
-### Debugging
+```
+sd:/apps/sm64wii/
+├── boot.dol
+├── assets.tbl
+├── meta.xml
+├── icon.png
+├── sm64/          <- put your US ROM here
+├── extracted/     <- created automatically on first launch
+└── saves/         <- save files
+```
 
-The code can be debugged using `gdb`. On Linux install the `gdb` package and execute `gdb <executable>`. On MSYS2 install by executing `pacman -S winpty gdb` and execute `winpty gdb <executable>`. The `winpty` program makes sure the keyboard works correctly in the terminal. Also consider changing the `-mwindows` compile flag to `-mconsole` to be able to see stdout/stderr as well as be able to press Ctrl+C to interrupt the program. In the Makefile, make sure you compile the sources using `-g` rather than `-O2` to include debugging symbols. See any online tutorial for how to use gdb.
+First launch: *Reading ROM* → *Building* (extracts textures, skyboxes and sound) → *Loading* → game.
+Later launches only show *Loading*.
 
-## ROM building
+## Controls
 
-It is possible to build N64 ROMs as well with this repository. See https://github.com/n64decomp/sm64 for instructions.
+| Controller | Layout |
+|---|---|
+| Wiimote + Nunchuk | Stick: move · A: jump · B: punch/dive · Z: crouch/ground pound · C: R button (camera) · D-pad: C buttons · +: Start · −: L |
+| Classic Controller | Left stick: move · A: jump · B: punch · ZL/ZR: Z · R: R · L: L · Right stick: C buttons · +: Start |
+| GameCube controller | Control stick: move · A: jump · B/X: punch · L/R: Z · Z: R · C-stick: C buttons · Start |
+| Wiimote alone (sideways) | D-pad: move · 2: jump · 1: punch · A: Z · B: R · +: Start · −: C-up |
 
-## Project Structure
-	
-	sm64
-	├── actors: object behaviors, geo layout, and display lists
-	├── asm: handwritten assembly code, rom header
-	│   └── non_matchings: asm for non-matching sections
-	├── assets: animation and demo data
-	│   ├── anims: animation data
-	│   └── demos: demo data
-	├── bin: C files for ordering display lists and textures
-	├── build: output directory
-	├── data: behavior scripts, misc. data
-	├── doxygen: documentation infrastructure
-	├── enhancements: example source modifications
-	├── include: header files
-	├── levels: level scripts, geo layout, and display lists
-	├── lib: SDK library code
-	├── rsp: audio and Fast3D RSP assembly code
-	├── sound: sequences, sound samples, and sound banks
-	├── src: C source code for game
-	│   ├── audio: audio code
-	│   ├── buffers: stacks, heaps, and task buffers
-	│   ├── engine: script processing engines and utils
-	│   ├── game: behaviors and rest of game source
-	│   ├── goddard: Mario intro screen
-	│   ├── menu: title screen and file, act, and debug level selection menus
-	│   └── pc: port code, audio and video renderer
-	├── text: dialog, level names, act names
-	├── textures: skybox and generic texture data
-	└── tools: build tools
+Player 1 uses controller 1 and Player 2 uses controller 2.
+Press **HOME** (or Start + L + R on a GameCube controller) to exit.
 
-## Contributing
+## Language
 
-Pull requests are welcome. For major changes, please open an issue first to
-discuss what you would like to change.
+The interface is in English by default and switches to Spanish when the Wii system language is Spanish.
+To force a language, create a `lang.txt` file next to `boot.dol` containing `en` or `es`.
 
-Run `clang-format` on your code to ensure it meets the project's coding standards.
+## Building
 
-Official Discord: https://discord.gg/7bcNTPK
+### With GitHub Actions (no local setup)
+
+The workflow in `.github/workflows` builds the app inside the `devkitpro/devkitppc` container and
+uploads `sm64wii.zip` as an artifact. No ROM is needed to build.
+
+### Locally
+
+1. Install [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `wii-dev` group (devkitPPC, libogc, libfat) and make sure
+   `powerpc-eabi-gcc` and `elf2dol` are in your `PATH`.
+2. Install `python3`, `gcc`, `g++` and `make` for the host tools.
+3. Run:
+
+   ```
+   make -j"$(nproc)" TARGET_WII=1 VERSION=us
+   ```
+
+   The output is `build/us_wii/boot.dol` and `build/us_wii/assets.tbl`. Both must be placed in the same folder on the SD card.
+
+### How it works
+
+- The game code is compiled without any ROM. Textures, skyboxes, sound banks and the ending cake are
+  compiled as zero-filled placeholders of the correct size (see `tools/wii_asset_tool.py`).
+- After linking, the tool writes `assets.tbl`, which maps every placeholder in RAM to its location in the ROM.
+- At runtime the launcher (`src/pc/wii/wii_main.c`) reads your ROM, writes the data to `extracted/`,
+  then copies it over the placeholders before the game starts.
+- Wii-specific code lives in `src/pc/wii/` (GX renderer, AESND audio, WPAD/PAD input, launcher and ROM loader).
+- The 2-player logic is in `src/game/mario.c` and a few small hooks in the camera, rendering and level code.
+
+## Troubleshooting
+
+- **"assets.tbl not found next to boot.dol"**: `boot.dol` and `assets.tbl` must be in the same folder, inside `apps/` on the SD card
+  (for example `sd:/apps/sm64wii/`). The error screen lists where the app looked.
+- **"ROM not found"**: put the ROM in the `sm64` folder next to `boot.dol`. It must be the US version and 8 MB.
+- **Extraction looks broken or incomplete**: delete the `extracted` folder to force a rebuild on the next launch.
+- **Dolphin**: when you open a `.dol` directly, Dolphin only sees its emulated SD card, so the app folder must be inside that virtual SD.
+
+## Known limitations
+
+- Only the US (NTSC-U) ROM is supported.
+- Title-screen attract demos are disabled.
+- Player 2 camera effects are suppressed, and a few edge cases (for example some dialogs while Player 2 triggers them) may look odd.
+
+## Credits
+
+- **Super Mario 64** © Nintendo. All rights to the original game belong to Nintendo.
+- **[n64decomp/sm64](https://github.com/n64decomp/sm64)**: the Super Mario 64 decompilation project and all of its contributors.
+- **[sm64-port](https://github.com/sm64-port/sm64-port)**: the native PC port this project is based on, and all of its contributors.
+- **[devkitPro](https://devkitpro.org/)**: devkitPPC, libogc and libfat, used to build and run on the Wii.
+- Wii port (GX renderer, audio, input, launcher, 2-player mode): this repository's contributors.
+
+The original sm64-port README is kept in [`README.sm64-port.md`](README.sm64-port.md).
