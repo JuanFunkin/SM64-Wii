@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>Super Mario 64 Wii</name>
+  <coder>sm64-port</coder>
+  <version>0.1</version>
+  <release_date>20261124000000</release_date>
+  <short_description>Super Mario 64 for Wii - 2 players</short_description>
+  <long_description>Native Wii port of Super Mario 64 (sm64-port) with 2-player co-op.
+Put your own Super Mario 64 (US) ROM in the sm64 folder next to boot.dol.
+Pon tu propia ROM de Super Mario 64 (US) en la carpeta sm64 junto a boot.dol.</long_description>
+</app>
