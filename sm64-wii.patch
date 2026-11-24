@@ -1,0 +1,2180 @@
+diff --git a/.gitignore b/.gitignore
+index 4e5c5f3..2ec6440 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -72,3 +72,5 @@ sm64config.txt
+ !/sound/**/*custom*/**/*.aiff
+ !/assets/**/*custom*.bin
+ !/assets/**/*custom*/**/*.bin
++build/
++*.o
+diff --git a/Makefile b/Makefile
+index cfac1e8..6c8a4eb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -19,6 +19,8 @@ DEFINES :=
+ TARGET_N64 ?= 0
+ # Build for Emscripten/WebGL
+ TARGET_WEB ?= 0
++# Build for the Nintendo Wii (devkitPPC)
++TARGET_WII ?= 0
+ # Compiler to use (ido or gcc)
+ 
+ 
+@@ -36,7 +38,7 @@ ifeq ($(TARGET_N64),0)
+   NON_MATCHING := 1
+   GRUCODE := f3dex2e
+   TARGET_WINDOWS := 0
+-  ifeq ($(TARGET_WEB),0)
++  ifeq ($(TARGET_WEB)$(TARGET_WII),00)
+     ifeq ($(OS),Windows_NT)
+       TARGET_WINDOWS := 1
+     else
+@@ -57,6 +59,12 @@ ifeq ($(TARGET_N64),0)
+     ENABLE_OPENGL ?= 1
+   endif
+ 
++  ifeq ($(TARGET_WII),1)
++    ENABLE_OPENGL := 0
++    NOEXTRACT := 1
++    VERSION := us
++  endif
++
+   # Sanity checks
+   ifeq ($(ENABLE_DX11),1)
+     ifneq ($(TARGET_WINDOWS),1)
+@@ -270,13 +278,26 @@ BUILD_DIR_BASE := build
+ # BUILD_DIR is the location where all build artifacts are placed
+ ifeq ($(TARGET_N64),1)
+   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)
++else ifeq ($(TARGET_WII),1)
++  BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_wii
+ else ifeq ($(TARGET_WEB),1)
+   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
+ else
+   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+ endif
+ 
+-ifeq ($(TARGET_WEB),1)
++SKYBOX_NAMES := $(notdir $(basename $(wildcard textures/skyboxes/*.png)))
++ifeq ($(TARGET_WII),1)
++  SKYBOX_NAMES := bbh bidw bitfs bits ccm cloud_floor clouds ssl water wdw
++  DUMMY != $(PYTHON) tools/wii_asset_tool.py gen . $(BUILD_DIR) >&2 || echo FAIL
++  ifeq ($(DUMMY),FAIL)
++    $(error Failed to generate Wii asset placeholders)
++  endif
++endif
++
++ifeq ($(TARGET_WII),1)
++  EXE := $(BUILD_DIR)/$(TARGET).elf
++else ifeq ($(TARGET_WEB),1)
+   EXE := $(BUILD_DIR)/$(TARGET).html
+ else ifeq ($(TARGET_WINDOWS),1)
+   EXE := $(BUILD_DIR)/$(TARGET).exe
+@@ -297,6 +318,8 @@ LEVEL_DIRS     := $(patsubst levels/%,%,$(dir $(wildcard levels/*/header.h)))
+ SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin bin/$(VERSION) data assets sound
+ ifeq ($(TARGET_N64),1)
+   SRC_DIRS += asm lib
++else ifeq ($(TARGET_WII),1)
++  SRC_DIRS += src/pc src/pc/gfx src/pc/audio src/pc/wii
+ else
+   SRC_DIRS += src/pc src/pc/gfx src/pc/audio src/pc/controller
+ endif
+@@ -315,13 +338,17 @@ LEVEL_C_FILES     := $(wildcard levels/*/leveldata.c) $(wildcard levels/*/script
+ C_FILES           := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c)) $(LEVEL_C_FILES)
+ CXX_FILES         := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp))
+ S_FILES           := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.s))
++ifeq ($(TARGET_WII),1)
++  C_FILES   := $(filter-out src/pc/gfx/% src/pc/audio/%,$(C_FILES)) src/pc/gfx/gfx_cc.c src/pc/gfx/gfx_pc.c src/pc/audio/audio_null.c
++  CXX_FILES :=
++endif
+ ULTRA_C_FILES     := $(foreach dir,$(ULTRA_SRC_DIRS),$(wildcard $(dir)/*.c))
+ GODDARD_C_FILES   := $(foreach dir,$(GODDARD_SRC_DIRS),$(wildcard $(dir)/*.c))
+ ifeq ($(TARGET_N64),1)
+   ULTRA_S_FILES   := $(foreach dir,$(ULTRA_SRC_DIRS),$(wildcard $(dir)/*.s))
+ endif
+ GENERATED_C_FILES := $(BUILD_DIR)/assets/mario_anim_data.c $(BUILD_DIR)/assets/demo_data.c \
+-  $(addprefix $(BUILD_DIR)/bin/,$(addsuffix _skybox.c,$(notdir $(basename $(wildcard textures/skyboxes/*.png)))))
++  $(addprefix $(BUILD_DIR)/bin/,$(addsuffix _skybox.c,$(SKYBOX_NAMES)))
+ 
+ ifneq ($(TARGET_N64),1)
+   ULTRA_C_FILES := \
+@@ -472,6 +499,19 @@ OBJDUMP := objdump
+ OBJCOPY := objcopy
+ PYTHON := python3
+ 
++ifeq ($(TARGET_WII),1)
++  DEVKITPRO ?= /opt/devkitpro
++  LIBOGC_INC := $(DEVKITPRO)/libogc/include
++  LIBOGC_LIB := $(DEVKITPRO)/libogc/lib/wii
++  CROSS := powerpc-eabi-
++  CC := $(CROSS)gcc
++  CXX := $(CROSS)g++
++  AS := $(CROSS)as
++  LD := $(CROSS)gcc
++  OBJCOPY := $(CROSS)objcopy
++  OBJDUMP := $(CROSS)objdump
++endif
++
+ # Platform-specific compiler and linker flags
+ ifeq ($(TARGET_WINDOWS),1)
+   PLATFORM_CFLAGS  := -DTARGET_WINDOWS
+@@ -486,6 +526,14 @@ ifeq ($(TARGET_WEB),1)
+   PLATFORM_LDFLAGS := -lm -no-pie -s TOTAL_MEMORY=20MB -g4 --source-map-base http://localhost:8080/ -s "EXTRA_EXPORTED_RUNTIME_METHODS=['callMain']"
+ endif
+ 
++ifeq ($(TARGET_WII),1)
++  WII_MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
++  PLATFORM_CFLAGS  := -DTARGET_WII $(WII_MACHDEP) -I$(LIBOGC_INC)
++  PLATFORM_LDFLAGS := $(WII_MACHDEP) -L$(LIBOGC_LIB) -lfat -lwiiuse -lbte -laesnd -logc -lm
++  ARCH_FLAGS := -O2
++endif
++ARCH_FLAGS ?= -march=native
++
+ PLATFORM_CFLAGS += -DNO_SEGMENTED_MEMORY -DUSE_SYSTEM_MALLOC
+ 
+ # Compiler and linker flags for graphics backend
+@@ -517,7 +565,7 @@ endif
+ GFX_CFLAGS += -DWIDESCREEN
+ 
+ CC_CHECK := $(CC) -fsyntax-only -fsigned-char -Wall -Wextra -Wno-format-security -D_LANGUAGE_C $(DEF_INC_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS)
+-CFLAGS := $(OPT_FLAGS) -D_LANGUAGE_C $(DEF_INC_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS) -fno-strict-aliasing -fwrapv -march=native
++CFLAGS := $(OPT_FLAGS) -D_LANGUAGE_C $(DEF_INC_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS) -fno-strict-aliasing -fwrapv $(ARCH_FLAGS)
+ 
+ ASFLAGS := -I include -I $(BUILD_DIR) $(foreach d,$(DEFINES),--defsym $(d))
+ 
+@@ -725,6 +773,7 @@ $(BUILD_DIR)/%.mio0.o: $(BUILD_DIR)/%.mio0
+ 	$(V)$(LD) -r -b binary $< -o $@
+ endif
+ 
++ifneq ($(TARGET_WII),1)
+ #==============================================================================#
+ # Sound File Generation                                                        #
+ #==============================================================================#
+@@ -773,6 +822,7 @@ $(SOUND_BIN_DIR)/%.m64: $(SOUND_BIN_DIR)/%.o
+ 	$(V)$(OBJCOPY) -j .rodata $< -O binary $@
+ 
+ 
++endif
+ #==============================================================================#
+ # Generated Source Code Files                                                  #
+ #==============================================================================#
+@@ -943,6 +993,14 @@ $(EXE): $(O_FILES) $(MIO0_FILES:.mio0=.o) $(ULTRA_O_FILES) $(GODDARD_O_FILES)
+ 	$(LD) -L $(BUILD_DIR) -o $@ $(O_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)
+ endif
+ 
++ifeq ($(TARGET_WII),1)
++$(BUILD_DIR)/src/pc/wii/wii_%.o $(BUILD_DIR)/src/pc/wii/rom_loader.o: CFLAGS := -O2 -g -Wall -D_LANGUAGE_C $(PLATFORM_CFLAGS)
++$(BUILD_DIR)/boot.dol: $(EXE)
++	elf2dol $< $@
++	$(PYTHON) tools/wii_asset_tool.py table . $< $(CROSS)nm $(BUILD_DIR)/assets.tbl
++all: $(BUILD_DIR)/boot.dol
++endif
++
+ 
+ 
+ .PHONY: all clean distclean default diff test load libultra
+diff --git a/README_WII.md b/README_WII.md
+new file mode 100644
+index 0000000..c6623e2
+--- /dev/null
++++ b/README_WII.md
+@@ -0,0 +1,31 @@
++# Super Mario 64 para Wii (homebrew) - basado en sm64-port
++
++## Como compilar (GitHub)
++1. Sube TODO este repositorio a GitHub (la carpeta ya trae los cambios aplicados).
++2. Pestana Actions -> "Build SM64 Wii (homebrew)" -> Run workflow.
++3. Descarga el artefacto `sm64wii.zip` y copia `apps/sm64wii` a la SD (o USB).
++
++## En la SD
++apps/sm64wii/boot.dol, assets.tbl, meta.xml
++apps/sm64wii/sm64/        <- pon aqui tu ROM de SM64 **US** (.z64/.v64/.n64, cualquier nombre; 8 MB)
++apps/sm64wii/extracted/   <- se crea y llena solo (primera vez)
++apps/sm64wii/saves/       <- partidas
++
++Primer arranque: barra "Leyendo ROM" -> "Compilando" (extrae texturas, skyboxes, sonido) -> "Cargando" -> juego.
++Siguientes arranques: solo "Cargando".
++
++## Controles
++- Wiimote + Nunchuk: stick = mover, A = saltar, B = golpear, Z = agacharse/ground pound, C = camara (R),
++  cruz = botones C, + = Start.   Classic Controller y mando GameCube tambien (se suman a Wiimote).
++- Wiimote solo (de lado): cruz = mover, 2 = saltar, 1 = golpear, A = Z, B = R, + = Start.
++- Jugador 1 = Wiimote/mando 1, Jugador 2 = Wiimote/mando 2.   HOME (o Start+L+R en GC) = salir.
++
++## Jugador 2
++Segundo Mario con ropa verde (las luces rojas del modelo se cambian a verde al dibujarlo).
++Sin camara propia (sigue al jugador 1). Si se aleja mas de ~5000 unidades, cae al vacio o muere, se teletransporta al jugador 1.
++Puede coger estrellas (al recogerla el nivel termina para ambos), abrir puertas, usar tuneles/warps y pinturas, como el jugador 1.
++Estrellas, monedas, llaves y vidas se comparten. Solo la muerte y el "suelo de warp" siguen siendo exclusivos del jugador 1.
++
++## Notas / limitaciones conocidas
++- Solo ROM US (NTSC-U). - Demos de la pantalla de titulo desactivadas (datos en cero).
++- Esto se escribio sin poder compilar para Wii: es probable que haya errores en la primera compilacion; pasalos tal cual.
+diff --git a/src/game/camera.c b/src/game/camera.c
+index e2fb175..5b61e59 100644
+--- a/src/game/camera.c
++++ b/src/game/camera.c
+@@ -155,6 +155,7 @@ extern struct CameraStoredInfo sParTrackTransOff;
+ extern struct CameraStoredInfo sCameraStoreCUp;
+ extern struct CameraStoredInfo sCameraStoreCutscene;
+ extern s16 gCameraMovementFlags;
++int gWiiPlayer2Active = 0;
+ extern s16 sStatusFlags;
+ extern struct CutsceneSplinePoint sCurCreditsSplinePos[32];
+ extern struct CutsceneSplinePoint sCurCreditsSplineFocus[32];
+@@ -491,6 +492,9 @@ extern u8 sZoomOutAreaMasks[];
+  * Starts a camera shake triggered by an interaction
+  */
+ void set_camera_shake_from_hit(s16 shake) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     switch (shake) {
+         // Makes the camera stop for a bit
+         case SHAKE_ATTACK:
+@@ -568,6 +572,9 @@ void set_camera_shake_from_hit(s16 shake) {
+  * Start a shake from the environment
+  */
+ void set_environmental_camera_shake(s16 shake) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     switch (shake) {
+         case SHAKE_ENV_EXPLOSION:
+             set_camera_pitch_shake(0x60, 0x8, 0x4000);
+@@ -612,6 +619,9 @@ void set_environmental_camera_shake(s16 shake) {
+  * Starts a camera shake, but scales the amplitude by the point's distance from the camera
+  */
+ void set_camera_shake_from_point(s16 shake, f32 posX, f32 posY, f32 posZ) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     switch (shake) {
+         case SHAKE_POS_BOWLING_BALL:
+             set_pitch_shake_from_point(0x28, 0x8, 0x4000, 2000.f, posX, posY, posZ);
+@@ -2859,6 +2869,9 @@ void transition_to_camera_mode(struct Camera *c, s16 newMode, s16 numFrames) {
+  * @param frames number of frames the transition should last, only used when entering C_UP
+  */
+ void set_camera_mode(struct Camera *c, s16 mode, s16 frames) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     struct LinearTransitionPoint *start = &sModeInfo.transitionStart;
+     struct LinearTransitionPoint *end = &sModeInfo.transitionEnd;
+ 
+@@ -4607,6 +4620,9 @@ void rotate_in_yz(Vec3f dst, Vec3f src, s16 pitch) {
+  * Start shaking the camera's pitch (up and down)
+  */
+ void set_camera_pitch_shake(s16 mag, s16 decay, s16 inc) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     if (gLakituState.shakeMagnitude[0] < mag) {
+         gLakituState.shakeMagnitude[0] = mag;
+         gLakituState.shakePitchDecay = decay;
+@@ -11295,6 +11311,9 @@ s32 cutscene_spawn_obj(u32 obj, s16 frame) {
+  *                   calculated from coss(), so this parameter can be thought of as an angular velocity.
+  */
+ void set_fov_shake(s16 amplitude, s16 decay, s16 shakeSpeed) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     if (amplitude > sFOVState.shakeAmplitude) {
+         sFOVState.shakeAmplitude = amplitude;
+         sFOVState.decay = decay;
+@@ -11306,6 +11325,9 @@ void set_fov_shake(s16 amplitude, s16 decay, s16 shakeSpeed) {
+  * Start shaking the camera's field of view, but reduce `amplitude` by distance from camera
+  */
+ void set_fov_shake_from_point(s16 amplitude, s16 decay, s16 shakeSpeed, f32 maxDist, f32 posX, f32 posY, f32 posZ) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     amplitude = reduce_by_dist_from_camera(amplitude, maxDist, posX, posY, posZ);
+ 
+     if (amplitude != 0) {
+@@ -11503,6 +11525,9 @@ void cutscene_set_fov_shake_preset(u8 preset) {
+  * @see set_camera_shake_from_point
+  */
+ void set_fov_shake_from_point_preset(u8 preset, f32 posX, f32 posY, f32 posZ) {
++    if (gWiiPlayer2Active) {
++        return;
++    }
+     switch (preset) {
+         case SHAKE_FOV_SMALL:
+             set_fov_shake_from_point(0x100, 0x30, 0x8000, 3000.f, posX, posY, posZ);
+diff --git a/src/game/game_init.c b/src/game/game_init.c
+index ba8a485..1ea2f53 100644
+--- a/src/game/game_init.c
++++ b/src/game/game_init.c
+@@ -20,6 +20,9 @@
+ #include "segment_symbols.h"
+ #include "rumble_init.h"
+ #include <prevent_bss_reordering.h>
++#ifdef TARGET_WII
++#include "../pc/wii/wii_platform_game.h"
++#endif
+ 
+ // First 3 controller slots
+ struct Controller gControllers[3];
+@@ -59,6 +62,8 @@ uintptr_t gPhysicalZBuffer;
+ void *gMarioAnimsMemAlloc;
+ void *gDemoInputsMemAlloc;
+ struct DmaHandlerList gMarioAnimsBuf;
++struct DmaHandlerList gMarioAnimsBuf2;   /* animaciones del jugador 2 */
++void *gMarioAnimsMemAlloc2;
+ struct DmaHandlerList gDemoInputsBuf;
+ 
+ // fillers
+@@ -553,7 +558,12 @@ void read_controller_inputs(void) {
+     // If any controllers are plugged in, update the controller information.
+     if (gControllerBits) {
+         osRecvMesg(&gSIEventMesgQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
++#ifdef TARGET_WII
++        wii_read_pad(0, &gControllerPads[0]);
++        wii_read_pad(1, &gControllerPads[1]);
++#else
+         osContGetReadData(&gControllerPads[0]);
++#endif
+ #if ENABLE_RUMBLE
+         release_rumble_pak_control();
+ #endif
+@@ -656,6 +666,8 @@ void setup_game_memory(void) {
+     gMarioAnimsMemAlloc = main_pool_alloc(0x4000, MEMORY_POOL_LEFT);
+     set_segment_base_addr(17, (void *) gMarioAnimsMemAlloc);
+     setup_dma_table_list(&gMarioAnimsBuf, gMarioAnims, gMarioAnimsMemAlloc);
++    gMarioAnimsMemAlloc2 = main_pool_alloc(0x4000, MEMORY_POOL_LEFT);
++    setup_dma_table_list(&gMarioAnimsBuf2, gMarioAnims, gMarioAnimsMemAlloc2);
+     // Setup Demo Inputs List
+     gDemoInputsMemAlloc = main_pool_alloc(0x800, MEMORY_POOL_LEFT);
+     set_segment_base_addr(24, (void *) gDemoInputsMemAlloc);
+diff --git a/src/game/level_update.c b/src/game/level_update.c
+index 907a012..c0fb0a4 100644
+--- a/src/game/level_update.c
++++ b/src/game/level_update.c
+@@ -161,7 +161,7 @@ struct CreditsEntry sCreditsSequence[] = {
+     { LEVEL_NONE, 0, 1, 0, { 0, 0, 0 }, NULL },
+ };
+ 
+-struct MarioState gMarioStates[1];
++struct MarioState gMarioStates[2];
+ struct HudDisplay gHudDisplay;
+ s16 sCurrPlayMode;
+ u16 D_80339ECA;
+@@ -704,6 +704,11 @@ void initiate_painting_warp(void) {
+  * Return the time left until the delayed warp is initiated.
+  */
+ s16 level_trigger_warp(struct MarioState *m, s32 warpOp) {
++#ifdef TARGET_WII
++    if (m != &gMarioStates[0] && (warpOp == WARP_OP_DEATH || warpOp == WARP_OP_WARP_FLOOR)) {
++        return 0;   /* J2 puede usar estrellas, puertas y tuneles, pero no mata el nivel */
++    }
++#endif
+     s32 val04 = TRUE;
+ 
+     if (sDelayedWarpOp == WARP_OP_NONE) {
+diff --git a/src/game/mario.c b/src/game/mario.c
+index 634d3ec..6e70aac 100644
+--- a/src/game/mario.c
++++ b/src/game/mario.c
+@@ -1,3 +1,4 @@
++#include <math.h>
+ #include <PR/ultratypes.h>
+ 
+ #include "sm64.h"
+@@ -1696,7 +1697,151 @@ void func_sh_8025574C(void) {
+ /**
+  * Main function for executing Mario's behavior.
+  */
++#ifdef TARGET_WII
++void wii_player2_spawn(void);
++void initiate_painting_warp(void);
++extern struct DmaHandlerList gMarioAnimsBuf2;
++extern int gWiiPlayer2Active;
++#define WII_P2_MAX_DIST 5000.0f   /* si J2 se aleja mas, se teletransporta a J1 */
++#define WII_P2_MAX_DY 3500.0f
++
++static void wii_p2_teleport(void) {
++    struct MarioState *p1 = &gMarioStates[0];
++    struct MarioState *p2 = &gMarioStates[1];
++
++    vec3f_copy(p2->pos, p1->pos);
++    p2->pos[0] += 100.0f;
++    vec3f_set(p2->vel, 0.0f, 0.0f, 0.0f);
++    p2->forwardVel = 0.0f;
++    p2->faceAngle[1] = p1->faceAngle[1];
++    p2->health = 0x880;
++    p2->hurtCounter = 0;
++    p2->healCounter = 0;
++    p2->squishTimer = 0;
++    p2->invincTimer = 30;
++    p2->heldObj = NULL;
++    p2->riddenObj = NULL;
++    p2->usedObj = NULL;
++    p2->floorHeight = find_floor(p2->pos[0], p2->pos[1], p2->pos[2], &p2->floor);
++    if (p2->pos[1] < p2->floorHeight) {
++        p2->pos[1] = p2->floorHeight;
++    }
++    p2->marioObj->oPosX = p2->pos[0];
++    p2->marioObj->oPosY = p2->pos[1];
++    p2->marioObj->oPosZ = p2->pos[2];
++    vec3f_copy(p2->marioObj->header.gfx.pos, p2->pos);
++    set_mario_action(p2, ACT_FREEFALL, 0);
++}
++
++static void wii_p2_post_update(void) {
++    struct MarioState *p1 = &gMarioStates[0];
++    struct MarioState *p2 = &gMarioStates[1];
++    f32 dx = p2->pos[0] - p1->pos[0];
++    f32 dy = p2->pos[1] - p1->pos[1];
++    f32 dz = p2->pos[2] - p1->pos[2];
++    f32 dist = sqrtf(dx * dx + dz * dz);
++
++    if (p2->health < 0x100) {
++        wii_p2_teleport();   /* J2 nunca dispara la muerte del nivel */
++        return;
++    }
++    if (p2->action & ACT_FLAG_INTANGIBLE) {
++        return;              /* baile de estrella, puertas, tuneles: no interrumpir */
++    }
++    if (p2->floor == NULL || dist > WII_P2_MAX_DIST || dy > WII_P2_MAX_DY || dy < -WII_P2_MAX_DY) {
++        wii_p2_teleport();
++    }
++}
++
++void wii_player2_spawn(void) {
++    struct MarioState *p1 = &gMarioStates[0];
++    struct MarioState *m = &gMarioStates[1];
++    struct Object *o;
++
++    /* warp dentro de la misma area: el objeto de J2 sigue vivo, solo se recoloca junto a J1 */
++    if (m->marioObj != NULL && m->marioObj != gMarioObject
++        && m->marioObj->activeFlags != ACTIVE_FLAG_DEACTIVATED
++        && m->marioObj->behavior == segmented_to_virtual(bhvMario)) {
++        wii_p2_teleport();
++        return;
++    }
++
++    o = spawn_object(gMarioObject, MODEL_MARIO, bhvMario);
++    *m = *p1;
++    m->marioObj = o;
++    m->marioBodyState = &gBodyStates[1];
++    m->statusForCamera = &gPlayerCameraState[1];
++    m->controller = &gControllers[1];
++    m->animList = &gMarioAnimsBuf2;
++    m->pos[0] += 100.0f;
++    m->heldObj = NULL;
++    m->riddenObj = NULL;
++    m->usedObj = NULL;
++    m->floorHeight = find_floor(m->pos[0], m->pos[1], m->pos[2], &m->floor);
++    if (m->pos[1] < m->floorHeight) {
++        m->pos[1] = m->floorHeight;
++    }
++    o->header.gfx.animInfo.animID = -1;
++    o->oPosX = m->pos[0];
++    o->oPosY = m->pos[1];
++    o->oPosZ = m->pos[2];
++    o->oMoveAngleYaw = m->faceAngle[1];
++    vec3f_copy(o->header.gfx.pos, m->pos);
++    vec3s_set(o->header.gfx.angle, 0, m->faceAngle[1], 0);
++}
++
++static s32 execute_mario_action_inner(UNUSED struct Object *o);
++
++s32 execute_mario_action(struct Object *o) {
++    struct MarioState *p1 = &gMarioStates[0];
++    struct MarioState *p2 = &gMarioStates[1];
++    struct MarioState *savedState;
++    struct Object *savedObj;
++    s16 savedCamFlags;
++    s32 result;
++
++    if (o == gMarioObject || p2->marioObj != o) {
++        return execute_mario_action_inner(o);
++    }
++
++    /* Jugador 2: misma logica que J1 (estrellas, puertas, tuneles, pinturas) con su propio estado.
++       Estrellas, monedas, llaves y vidas se comparten con J1. La camara solo la controla J1. */
++    p2->numStars = p1->numStars;
++    p2->numKeys = p1->numKeys;
++    p2->numCoins = p1->numCoins;
++    p2->numLives = p1->numLives;
++
++    savedState = gMarioState;
++    savedObj = gMarioObject;
++    savedCamFlags = gCameraMovementFlags;
++
++    gMarioState = p2;
++    gMarioObject = o;
++    gWiiPlayer2Active = 1;
++
++    result = execute_mario_action_inner(o);
++    if (p1->action != ACT_DISAPPEARED) {
++        initiate_painting_warp();
++    }
++
++    gWiiPlayer2Active = 0;
++    gMarioObject = savedObj;
++    gMarioState = savedState;
++    gCameraMovementFlags = savedCamFlags;
++
++    p1->numStars = p2->numStars;
++    p1->numKeys = p2->numKeys;
++    p1->numCoins = p2->numCoins;
++    p1->numLives = p2->numLives;
++
++    wii_p2_post_update();
++    return result;
++}
++
++static s32 execute_mario_action_inner(UNUSED struct Object *o) {
++#else
+ s32 execute_mario_action(UNUSED struct Object *o) {
++#endif
+     s32 inLoop = TRUE;
+ 
+     if (gMarioState->action) {
+@@ -1748,7 +1893,9 @@ s32 execute_mario_action(UNUSED struct Object *o) {
+ 
+         sink_mario_in_quicksand(gMarioState);
+         squish_mario_model(gMarioState);
+-        set_submerged_cam_preset_and_spawn_bubbles(gMarioState);
++        if (gMarioState == &gMarioStates[0]) {
++            set_submerged_cam_preset_and_spawn_bubbles(gMarioState);
++        }
+         update_mario_health(gMarioState);
+         update_mario_info_for_cam(gMarioState);
+         mario_update_hitbox_and_cap_model(gMarioState);
+@@ -1866,6 +2013,10 @@ void init_mario(void) {
+ 
+         capObject->oMoveAngleYaw = 0;
+     }
++
++#ifdef TARGET_WII
++    wii_player2_spawn();
++#endif
+ }
+ 
+ void init_mario_from_save_file(void) {
+diff --git a/src/game/mario_misc.c b/src/game/mario_misc.c
+index 56e1a0a..8e25d9e 100644
+--- a/src/game/mario_misc.c
++++ b/src/game/mario_misc.c
+@@ -24,6 +24,7 @@
+ #include "save_file.h"
+ #include "skybox.h"
+ #include "sound_init.h"
++extern int gWiiGfxPlayer;   /* 0 = Mario 1, 1 = Mario 2 (solo durante su dibujo) */
+ 
+ #define TOAD_STAR_1_REQUIREMENT 12
+ #define TOAD_STAR_2_REQUIREMENT 25
+@@ -324,7 +325,7 @@ Gfx *geo_mirror_mario_set_alpha(s32 callContext, struct GraphNode *node, UNUSED
+     UNUSED u8 unused1[4];
+     Gfx *gfx = NULL;
+     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[asGenerated->parameter];
++    struct MarioBodyState *bodyState = &gBodyStates[(asGenerated->parameter) + gWiiGfxPlayer];
+     s16 alpha;
+     UNUSED u8 unused2[4];
+ 
+@@ -342,7 +343,7 @@ Gfx *geo_mirror_mario_set_alpha(s32 callContext, struct GraphNode *node, UNUSED
+  */
+ Gfx *geo_switch_mario_stand_run(s32 callContext, struct GraphNode *node, UNUSED Mat4 *mtx) {
+     struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[switchCase->numCases];
++    struct MarioBodyState *bodyState = &gBodyStates[(switchCase->numCases) + gWiiGfxPlayer];
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+         // assign result. 0 if moving, 1 if stationary.
+@@ -356,7 +357,7 @@ Gfx *geo_switch_mario_stand_run(s32 callContext, struct GraphNode *node, UNUSED
+  */
+ Gfx *geo_switch_mario_eyes(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[switchCase->numCases];
++    struct MarioBodyState *bodyState = &gBodyStates[(switchCase->numCases) + gWiiGfxPlayer];
+     s16 blinkFrame;
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+@@ -379,7 +380,7 @@ Gfx *geo_switch_mario_eyes(s32 callContext, struct GraphNode *node, UNUSED Mat4
+  */
+ Gfx *geo_mario_tilt_torso(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[asGenerated->parameter];
++    struct MarioBodyState *bodyState = &gBodyStates[(asGenerated->parameter) + gWiiGfxPlayer];
+     s32 action = bodyState->action;
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+@@ -401,7 +402,7 @@ Gfx *geo_mario_tilt_torso(s32 callContext, struct GraphNode *node, UNUSED Mat4 *
+  */
+ Gfx *geo_mario_head_rotation(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[asGenerated->parameter];
++    struct MarioBodyState *bodyState = &gBodyStates[(asGenerated->parameter) + gWiiGfxPlayer];
+     s32 action = bodyState->action;
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+@@ -429,7 +430,7 @@ Gfx *geo_mario_head_rotation(s32 callContext, struct GraphNode *node, UNUSED Mat
+  */
+ Gfx *geo_switch_mario_hand(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[0];
++    struct MarioBodyState *bodyState = &gBodyStates[(0) + gWiiGfxPlayer];
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+         if (bodyState->handState == MARIO_HAND_FISTS) {
+@@ -460,7 +461,7 @@ Gfx *geo_mario_hand_foot_scaler(s32 callContext, struct GraphNode *node, UNUSED
+     static s16 sMarioAttackAnimCounter = 0;
+     struct GraphNodeGenerated *asGenerated = (struct GraphNodeGenerated *) node;
+     struct GraphNodeScale *scaleNode = (struct GraphNodeScale *) node->next;
+-    struct MarioBodyState *bodyState = &gBodyStates[0];
++    struct MarioBodyState *bodyState = &gBodyStates[(0) + gWiiGfxPlayer];
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+         scaleNode->scale = 1.0f;
+@@ -482,7 +483,7 @@ Gfx *geo_mario_hand_foot_scaler(s32 callContext, struct GraphNode *node, UNUSED
+  */
+ Gfx *geo_switch_mario_cap_effect(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[switchCase->numCases];
++    struct MarioBodyState *bodyState = &gBodyStates[(switchCase->numCases) + gWiiGfxPlayer];
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+         switchCase->selectedCase = bodyState->modelState >> 8;
+@@ -497,7 +498,7 @@ Gfx *geo_switch_mario_cap_effect(s32 callContext, struct GraphNode *node, UNUSED
+ Gfx *geo_switch_mario_cap_on_off(s32 callContext, struct GraphNode *node, UNUSED Mat4 *c) {
+     struct GraphNode *next = node->next;
+     struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *) node;
+-    struct MarioBodyState *bodyState = &gBodyStates[switchCase->numCases];
++    struct MarioBodyState *bodyState = &gBodyStates[(switchCase->numCases) + gWiiGfxPlayer];
+ 
+     if (callContext == GEO_CONTEXT_RENDER) {
+         switchCase->selectedCase = bodyState->capState & 1;
+@@ -526,7 +527,7 @@ Gfx *geo_mario_rotate_wing_cap_wings(s32 callContext, struct GraphNode *node, UN
+     if (callContext == GEO_CONTEXT_RENDER) {
+         struct GraphNodeRotation *rotNode = (struct GraphNodeRotation *) node->next;
+ 
+-        if (!gBodyStates[asGenerated->parameter >> 1].wingFlutter) {
++        if (!gBodyStates[(asGenerated->parameter >> 1) + gWiiGfxPlayer].wingFlutter) {
+             rotX = (coss((gAreaUpdateCounter & 0xF) << 12) + 1.0f) * 4096.0f;
+         } else {
+             rotX = (coss((gAreaUpdateCounter & 7) << 13) + 1.0f) * 6144.0f;
+diff --git a/src/game/rendering_graph_node.c b/src/game/rendering_graph_node.c
+index 1f94b56..0efd3ee 100644
+--- a/src/game/rendering_graph_node.c
++++ b/src/game/rendering_graph_node.c
+@@ -10,6 +10,9 @@
+ #include "rendering_graph_node.h"
+ #include "shadow.h"
+ #include "sm64.h"
++#include "level_update.h"
++#include "object_list_processor.h"
++int gWiiGfxPlayer = 0;
+ 
+ /**
+  * This file contains the code that processes the scene graph for rendering.
+@@ -841,7 +844,19 @@ static void geo_process_object(struct Object *node) {
+             if (node->header.gfx.sharedChild != NULL) {
+                 gCurGraphNodeObject = (struct GraphNodeObject *) node;
+                 node->header.gfx.sharedChild->parent = &node->header.gfx.node;
++#ifdef TARGET_WII
++                gWiiGfxPlayer = (node != gMarioObject && node == gMarioStates[1].marioObj) ? 1 : 0;
++                if (gWiiGfxPlayer) {
++                    gDPNoOpTag(gDisplayListHead++, 0x5632A001);   /* inicio color verde */
++                }
++#endif
+                 geo_process_node_and_siblings(node->header.gfx.sharedChild);
++#ifdef TARGET_WII
++                if (gWiiGfxPlayer) {
++                    gDPNoOpTag(gDisplayListHead++, 0x5632A000);   /* fin color verde */
++                }
++                gWiiGfxPlayer = 0;
++#endif
+                 node->header.gfx.sharedChild->parent = NULL;
+                 gCurGraphNodeObject = NULL;
+             }
+diff --git a/src/pc/gfx/gfx_pc.c b/src/pc/gfx/gfx_pc.c
+index 15d7b94..02d17ab 100644
+--- a/src/pc/gfx/gfx_pc.c
++++ b/src/pc/gfx/gfx_pc.c
+@@ -79,6 +79,7 @@ static struct ColorCombiner color_combiner_pool[64];
+ static uint8_t color_combiner_pool_size;
+ 
+ static struct RSP {
++    bool wii_tint;   /* Mario 2: luces rojas -> verdes */
+     float modelview_matrix_stack[11][4][4];
+     uint8_t modelview_matrix_stack_size;
+     
+@@ -954,6 +955,20 @@ static void gfx_calc_and_set_viewport(const Vp_t *viewport) {
+     rdp.viewport_or_scissor_changed = true;
+ }
+ 
++static void gfx_wii_tint_light(Light_t *l) {
++    if (!rsp.wii_tint) {
++        return;
++    }
++    if (l->col[0] > 16 && l->col[0] > l->col[1] * 2 && l->col[0] > l->col[2] * 2) {
++        uint8_t r = l->col[0];
++        l->col[0] = l->col[1];
++        l->col[1] = r;
++        r = l->colc[0];
++        l->colc[0] = l->colc[1];
++        l->colc[1] = r;
++    }
++}
++
+ static void gfx_sp_movemem(uint8_t index, uint8_t offset, const void* data) {
+     switch (index) {
+         case G_MV_VIEWPORT:
+@@ -972,6 +987,7 @@ static void gfx_sp_movemem(uint8_t index, uint8_t offset, const void* data) {
+             if (lightidx >= 0 && lightidx <= MAX_LIGHTS) { // skip lookat
+                 // NOTE: reads out of bounds if it is an ambient light
+                 memcpy(rsp.current_lights + lightidx, data, sizeof(Light_t));
++                gfx_wii_tint_light(rsp.current_lights + lightidx);
+             }
+             break;
+         }
+@@ -981,6 +997,7 @@ static void gfx_sp_movemem(uint8_t index, uint8_t offset, const void* data) {
+         case G_MV_L2:
+             // NOTE: reads out of bounds if it is an ambient light
+             memcpy(rsp.current_lights + (index - G_MV_L0) / 2, data, sizeof(Light_t));
++            gfx_wii_tint_light(rsp.current_lights + (index - G_MV_L0) / 2);
+             break;
+ #endif
+     }
+@@ -1367,6 +1384,13 @@ static void gfx_run_dl(Gfx* cmd) {
+         uint32_t opcode = cmd->words.w0 >> 24;
+         
+         switch (opcode) {
++            case G_NOOP:
++                if (cmd->words.w1 == 0x5632A001) {
++                    rsp.wii_tint = true;
++                } else if (cmd->words.w1 == 0x5632A000) {
++                    rsp.wii_tint = false;
++                }
++                break;
+             // RSP commands:
+             case G_MTX:
+ #ifdef F3DEX_GBI_2
+diff --git a/src/pc/pc_main.c b/src/pc/pc_main.c
+index 89aa1fa..42aabc9 100644
+--- a/src/pc/pc_main.c
++++ b/src/pc/pc_main.c
+@@ -32,6 +32,10 @@
+ 
+ #include "compat.h"
+ 
++#ifdef TARGET_WII
++#include "wii/wii_platform_game.h"
++#endif
++
+ #define CONFIG_FILE "sm64config.txt"
+ 
+ OSMesg gMainReceivedMesg;
+@@ -158,7 +162,10 @@ void main_func(void) {
+     request_anim_frame(on_anim_frame);
+ #endif
+ 
+-#if defined(ENABLE_DX12)
++#if defined(TARGET_WII)
++    rendering_api = &gfx_wii_rapi;
++    wm_api = &gfx_wii_wm;
++#elif defined(ENABLE_DX12)
+     rendering_api = &gfx_direct3d12_api;
+     wm_api = &gfx_dxgi_api;
+ #elif defined(ENABLE_DX11)
+@@ -179,7 +186,9 @@ void main_func(void) {
+     gfx_init(wm_api, rendering_api, "Super Mario 64 PC-Port", configFullscreen);
+     
+     wm_api->set_fullscreen_changed_callback(on_fullscreen_changed);
++#ifndef TARGET_WII
+     wm_api->set_keyboard_callbacks(keyboard_on_key_down, keyboard_on_key_up, keyboard_on_all_keys_up);
++#endif
+     
+ #if HAVE_WASAPI
+     if (audio_api == NULL && audio_wasapi.init()) {
+@@ -200,6 +209,11 @@ void main_func(void) {
+     if (audio_api == NULL && audio_sdl.init()) {
+         audio_api = &audio_sdl;
+     }
++#endif
++#ifdef TARGET_WII
++    if (audio_api == NULL && audio_wii.init()) {
++        audio_api = &audio_wii;
++    }
+ #endif
+     if (audio_api == NULL) {
+         audio_api = &audio_null;
+@@ -228,7 +242,7 @@ int WINAPI WinMain(UNUSED HINSTANCE hInstance, UNUSED HINSTANCE hPrevInstance, U
+     main_func();
+     return 0;
+ }
+-#else
++#elif !defined(TARGET_WII)
+ int main(UNUSED int argc, UNUSED char *argv[]) {
+     main_func();
+     return 0;
+diff --git a/src/pc/ultra_reimplementation.c b/src/pc/ultra_reimplementation.c
+index 2d8811a..cb030be 100644
+--- a/src/pc/ultra_reimplementation.c
++++ b/src/pc/ultra_reimplementation.c
+@@ -1,3 +1,8 @@
++#ifdef TARGET_WII
++#define SAVE_FILE_PATH "saves/sm64_save_file.bin"
++#else
++#define SAVE_FILE_PATH "sm64_save_file.bin"
++#endif
+ #include <stdio.h>
+ #include <string.h>
+ #include "lib/src/libultra_internal.h"
+@@ -146,7 +151,7 @@ s32 osEepromLongRead(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes)
+         ret = 0;
+     }
+ #else
+-    FILE *fp = fopen("sm64_save_file.bin", "rb");
++    FILE *fp = fopen(SAVE_FILE_PATH, "rb");
+     if (fp == NULL) {
+         return -1;
+     }
+@@ -176,7 +181,7 @@ s32 osEepromLongWrite(UNUSED OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes
+     }, content);
+     s32 ret = 0;
+ #else
+-    FILE* fp = fopen("sm64_save_file.bin", "wb");
++    FILE* fp = fopen(SAVE_FILE_PATH, "wb");
+     if (fp == NULL) {
+         return -1;
+     }
+diff --git a/src/pc/wii/osCont_wii.c b/src/pc/wii/osCont_wii.c
+new file mode 100644
+index 0000000..9a6fb7d
+--- /dev/null
++++ b/src/pc/wii/osCont_wii.c
+@@ -0,0 +1,14 @@
++/* Sustituye a controller_entry_point.c: implementa osCont* de libultra para la Wii (2 jugadores). */
++#include <ultra64.h>
++#include "macros.h"
++#include "wii_platform_game.h"
++
++s32 osContInit(UNUSED OSMesgQueue *mq, u8 *controllerBits, UNUSED OSContStatus *status) {
++    wii_input_init();
++    *controllerBits = 3;           /* puertos 1 y 2 conectados */
++    return 0;
++}
++
++s32 osContStartReadData(UNUSED OSMesgQueue *mesg) { return 0; }
++
++void osContGetReadData(OSContPad *pad) { wii_read_pad(0, pad); }
+diff --git a/src/pc/wii/rom_loader.c b/src/pc/wii/rom_loader.c
+new file mode 100644
+index 0000000..9640a46
+--- /dev/null
++++ b/src/pc/wii/rom_loader.c
+@@ -0,0 +1,90 @@
++#include "rom_loader.h"
++#include <string.h>
++#include <stdio.h>
++#include <dirent.h>
++#include <sys/stat.h>
++
++RomFormat rom_detect_format(const uint8_t *h) {
++    if (h[0] == 0x80 && h[1] == 0x37 && h[2] == 0x12 && h[3] == 0x40) return ROM_FMT_Z64;
++    if (h[0] == 0x37 && h[1] == 0x80 && h[2] == 0x40 && h[3] == 0x12) return ROM_FMT_V64;
++    if (h[0] == 0x40 && h[1] == 0x12 && h[2] == 0x37 && h[3] == 0x80) return ROM_FMT_N64;
++    return ROM_FMT_UNKNOWN;
++}
++
++int rom_to_z64(uint8_t *b, size_t len, RomFormat fmt) {
++    size_t i;
++    if (fmt == ROM_FMT_Z64) return 0;
++    if (len & 3) return -1;
++    if (fmt == ROM_FMT_V64) {          /* swap de bytes por pares */
++        for (i = 0; i < len; i += 2) { uint8_t t = b[i]; b[i] = b[i+1]; b[i+1] = t; }
++        return 0;
++    }
++    if (fmt == ROM_FMT_N64) {          /* little-endian de 32 bits */
++        for (i = 0; i < len; i += 4) {
++            uint8_t t0 = b[i], t1 = b[i+1];
++            b[i] = b[i+3]; b[i+1] = b[i+2]; b[i+2] = t1; b[i+3] = t0;
++        }
++        return 0;
++    }
++    return -1;
++}
++
++RomRegion rom_detect_region(const uint8_t *z, size_t len) {
++    if (len < 0x40 || memcmp(z + 0x20, "SUPER MARIO 64", 14) != 0) return ROM_REGION_UNKNOWN;
++    switch (z[0x3E]) {
++        case 'J': return ROM_REGION_JP;
++        case 'E': return ROM_REGION_US;
++        case 'P': return ROM_REGION_EU;
++    }
++    return ROM_REGION_UNKNOWN;
++}
++
++int rom_find_in_dir(const char *dir, char *out, size_t outlen) {
++    DIR *d = opendir(dir);
++    struct dirent *e;
++    if (!d) return -1;
++    while ((e = readdir(d))) {
++        char path[512]; struct stat st; FILE *f; uint8_t h[4];
++        if (e->d_name[0] == '.') continue;
++        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
++        if (stat(path, &st) != 0 || S_ISDIR(st.st_mode)) continue;
++        if (st.st_size < 0x400000 || st.st_size > 0x2000000) continue; /* 4-32 MB */
++        f = fopen(path, "rb");
++        if (!f) continue;
++        if (fread(h, 1, 4, f) == 4 && rom_detect_format(h) != ROM_FMT_UNKNOWN) {
++            fclose(f); closedir(d);
++            snprintf(out, outlen, "%s", path);
++            return 0;
++        }
++        fclose(f);
++    }
++    closedir(d);
++    return -1;
++}
++
++/* Formato MIO0: "MIO0", u32 len, u32 off_comp, u32 off_raw, luego bits / pares comprimidos / bytes crudos. */
++static uint32_t be32(const uint8_t *p) { return (p[0]<<24)|(p[1]<<16)|(p[2]<<8)|p[3]; }
++
++int mio0_decode(const uint8_t *s, size_t sl, uint8_t *dst, size_t cap) {
++    uint32_t outlen, comp_off, raw_off, bit_i = 0, comp_i, raw_i, out = 0;
++    const uint8_t *bits;
++    if (sl < 16 || memcmp(s, "MIO0", 4) != 0) return -1;
++    outlen = be32(s + 4); comp_off = be32(s + 8); raw_off = be32(s + 12);
++    if (outlen > cap || comp_off >= sl || raw_off >= sl) return -1;
++    bits = s + 16; comp_i = comp_off; raw_i = raw_off;
++    while (out < outlen) {
++        if (bits[bit_i >> 3] & (0x80 >> (bit_i & 7))) {
++            if (raw_i >= sl) return -1;
++            dst[out++] = s[raw_i++];
++        } else {
++            uint16_t pair; int len, dist, k;
++            if (comp_i + 2 > sl) return -1;
++            pair = (s[comp_i] << 8) | s[comp_i + 1]; comp_i += 2;
++            len = (pair >> 12) + 3; dist = (pair & 0xFFF) + 1;
++            if ((uint32_t)dist > out) return -1;
++            for (k = 0; k < len && out < outlen; k++, out++) dst[out] = dst[out - dist];
++        }
++        bit_i++;
++    }
++    return (int)out;
++}
+diff --git a/src/pc/wii/rom_loader.h b/src/pc/wii/rom_loader.h
+new file mode 100644
+index 0000000..5672c29
+--- /dev/null
++++ b/src/pc/wii/rom_loader.h
+@@ -0,0 +1,20 @@
++#ifndef WII_ROM_LOADER_H
++#define WII_ROM_LOADER_H
++#include <stdint.h>
++#include <stddef.h>
++
++typedef enum { ROM_FMT_UNKNOWN = 0, ROM_FMT_Z64, ROM_FMT_V64, ROM_FMT_N64 } RomFormat;
++typedef enum { ROM_REGION_UNKNOWN = 0, ROM_REGION_JP, ROM_REGION_US, ROM_REGION_EU } RomRegion;
++
++/* Detecta el formato por los 4 primeros bytes (80 37 12 40 = z64, 37 80 40 12 = v64, 40 12 37 80 = n64). */
++RomFormat rom_detect_format(const uint8_t *head4);
++/* Convierte el buffer a big-endian (z64) en el lugar. Devuelve 0 si ok. */
++int rom_to_z64(uint8_t *buf, size_t len, RomFormat fmt);
++/* Lee el codigo de region del header (byte 0x3E) y valida el titulo. */
++RomRegion rom_detect_region(const uint8_t *z64, size_t len);
++/* Busca una ROM dentro de dir (cualquier nombre/extension, ~8MB). Escribe la ruta en out. 0 = encontrada. */
++int rom_find_in_dir(const char *dir, char *out, size_t outlen);
++
++/* MIO0: devuelve bytes escritos en dst o -1 si error. */
++int mio0_decode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap);
++#endif
+diff --git a/src/pc/wii/wii_audio.c b/src/pc/wii/wii_audio.c
+new file mode 100644
+index 0000000..49da5c8
+--- /dev/null
++++ b/src/pc/wii/wii_audio.c
+@@ -0,0 +1,73 @@
++/* Audio Wii (AESND).  El juego produce PCM estereo s16 a 32 kHz; lo guardamos en un anillo y AESND lo consume. */
++#include <gccore.h>
++#include <aesndlib.h>
++#include <malloc.h>
++#include <string.h>
++#include "../audio/audio_api.h"
++
++#define RING_SAMPLES 16384            /* muestras estereo (4 bytes c/u) */
++#define DMA_SAMPLES 1024              /* 4096 bytes, multiplo de 32 */
++
++static int16_t ring[RING_SAMPLES * 2];
++static volatile uint32_t rd, wr;      /* en muestras, crecen sin parar */
++static AESNDPB *voice;
++static uint8_t *dma[2];
++static int cur;
++
++static uint32_t fill(void) { return wr - rd; }
++
++static void voice_cb(AESNDPB *pb, uint32_t state, void *arg) {
++    (void) arg;
++    if (state != VOICE_STATE_STREAM) return;
++    int16_t *out = (int16_t *) dma[cur];
++    uint32_t avail = fill();
++    uint32_t n = avail < DMA_SAMPLES ? avail : DMA_SAMPLES;
++    for (uint32_t i = 0; i < n; i++) {
++        uint32_t p = (rd + i) % RING_SAMPLES;
++        out[i * 2] = ring[p * 2];
++        out[i * 2 + 1] = ring[p * 2 + 1];
++    }
++    if (n < DMA_SAMPLES) memset(out + n * 2, 0, (DMA_SAMPLES - n) * 4);
++    rd += n;
++    DCFlushRange(out, DMA_SAMPLES * 4);
++    AESND_SetVoiceBuffer(pb, out, DMA_SAMPLES * 4);
++    cur ^= 1;
++}
++
++static bool wii_audio_init(void) {
++    AESND_Init();
++    dma[0] = memalign(32, DMA_SAMPLES * 4);
++    dma[1] = memalign(32, DMA_SAMPLES * 4);
++    if (!dma[0] || !dma[1]) return false;
++    memset(dma[0], 0, DMA_SAMPLES * 4);
++    memset(dma[1], 0, DMA_SAMPLES * 4);
++    voice = AESND_AllocateVoice(voice_cb);
++    if (!voice) return false;
++    AESND_SetVoiceFormat(voice, VOICE_STEREO16);
++    AESND_SetVoiceFrequency(voice, 32000);
++    AESND_SetVoiceVolume(voice, 255, 255);
++    AESND_SetVoiceStream(voice, true);
++    DCFlushRange(dma[0], DMA_SAMPLES * 4);
++    AESND_SetVoiceBuffer(voice, dma[0], DMA_SAMPLES * 4);
++    AESND_SetVoiceStop(voice, false);
++    AESND_Pause(false);
++    cur = 1;
++    return true;
++}
++
++static int wii_audio_buffered(void) { return (int) fill(); }
++static int wii_audio_desired(void) { return 1100; }
++
++static void wii_audio_play(const uint8_t *buf, size_t len) {
++    const int16_t *s = (const int16_t *) buf;
++    size_t n = len / 4;
++    if (fill() + n > RING_SAMPLES) return;          /* sin espacio: descarta */
++    for (size_t i = 0; i < n; i++) {
++        uint32_t p = (wr + i) % RING_SAMPLES;
++        ring[p * 2] = s[i * 2];
++        ring[p * 2 + 1] = s[i * 2 + 1];
++    }
++    wr += n;
++}
++
++struct AudioAPI audio_wii = { wii_audio_init, wii_audio_buffered, wii_audio_desired, wii_audio_play };
+diff --git a/src/pc/wii/wii_gfx.c b/src/pc/wii/wii_gfx.c
+new file mode 100644
+index 0000000..8d6c4f3
+--- /dev/null
++++ b/src/pc/wii/wii_gfx.c
+@@ -0,0 +1,503 @@
++/* Backend de video GX (Wii) para el sm64-port.
++ * gfx_pc.c entrega vertices ya transformados a espacio "clip" (x,y,z,w).  Aqui los pasamos a GX como
++ * (x, y, -w) con una proyeccion perspectiva personalizada (w' = -z) para que GX haga la division por w,
++ * la correccion de perspectiva de texturas y el z-buffer.  Las llamadas 2D (w == 1) usan proyeccion ortografica.
++ * El combinador de color N64 se traduce a etapas TEV. */
++#include <gccore.h>
++#include <malloc.h>
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "../gfx/gfx_cc.h"
++#include "../gfx/gfx_rendering_api.h"
++#include "../gfx/gfx_window_manager_api.h"
++#include "wii_platform.h"
++
++#define FIFO_SIZE (256 * 1024)
++#define MAX_TEXTURES 4096
++#define PERSP_NEAR 20.0f
++#define PERSP_FAR 30000.0f
++
++uint32_t wii_logical_w = 640, wii_logical_h = 480;
++
++/* ------------------------------------------------------------------ texturas */
++struct WiiTex {
++    uint8_t *data;       /* RGBA8 de GX (bloques 4x4), alineado a 32 */
++    uint16_t w, h;       /* tamano real (multiplo de 4) */
++    bool linear;
++    uint8_t cms, cmt;
++};
++static struct WiiTex textures[MAX_TEXTURES];
++static uint32_t num_textures = 1;
++static uint32_t cur_tex[2];
++static int cur_tile;
++
++struct ShaderProgram {
++    uint32_t shader_id;
++    struct CCFeatures cc;
++    uint8_t num_floats;
++    uint8_t off_tex, off_fog, off_in[4];
++};
++static struct ShaderProgram shader_pool[64];
++static int shader_pool_size;
++static struct ShaderProgram *cur_prg;
++
++static bool depth_test = true, depth_mask = true, zmode_decal = false, use_alpha = false;
++
++static bool z_is_from_0_to_1(void) { return false; }
++static void unload_shader(struct ShaderProgram *p) { (void) p; }
++static void load_shader(struct ShaderProgram *p) { cur_prg = p; }
++
++static struct ShaderProgram *create_and_load_new_shader(uint32_t id) {
++    struct ShaderProgram *p = &shader_pool[shader_pool_size++];
++    memset(p, 0, sizeof(*p));
++    p->shader_id = id;
++    gfx_cc_get_features(id, &p->cc);
++    int n = 4;
++    if (p->cc.used_textures[0] || p->cc.used_textures[1]) { p->off_tex = n; n += 2; }
++    if (p->cc.opt_fog) { p->off_fog = n; n += 4; }
++    for (int i = 0; i < p->cc.num_inputs; i++) { p->off_in[i] = n; n += p->cc.opt_alpha ? 4 : 3; }
++    p->num_floats = n;
++    cur_prg = p;
++    return p;
++}
++
++static struct ShaderProgram *lookup_shader(uint32_t id) {
++    for (int i = 0; i < shader_pool_size; i++)
++        if (shader_pool[i].shader_id == id) return &shader_pool[i];
++    return NULL;
++}
++
++static void shader_get_info(struct ShaderProgram *p, uint8_t *num_inputs, bool used_textures[2]) {
++    *num_inputs = p->cc.num_inputs;
++    used_textures[0] = p->cc.used_textures[0];
++    used_textures[1] = p->cc.used_textures[1];
++}
++
++static uint32_t new_texture(void) {
++    if (num_textures >= MAX_TEXTURES) return 0;
++    return num_textures++;
++}
++
++static void select_texture(int tile, uint32_t id) { cur_tile = tile; cur_tex[tile] = id; }
++
++static void upload_texture(const uint8_t *rgba, int w, int h) {
++    struct WiiTex *t = &textures[cur_tex[cur_tile]];
++    int pw = (w + 3) & ~3, ph = (h + 3) & ~3;
++    size_t size = (size_t) pw * ph * 4;
++    if (t->data == NULL || (size_t) t->w * t->h * 4 != size) {
++        free(t->data);
++        t->data = memalign(32, (size + 31) & ~31);
++        if (!t->data) return;
++    }
++    t->w = pw; t->h = ph;
++    for (int by = 0; by < ph / 4; by++) {
++        for (int bx = 0; bx < pw / 4; bx++) {
++            uint8_t *blk = t->data + ((by * (pw / 4)) + bx) * 64;
++            for (int y = 0; y < 4; y++) {
++                for (int x = 0; x < 4; x++) {
++                    int sx = bx * 4 + x, sy = by * 4 + y;
++                    if (sx >= w) sx = w - 1;
++                    if (sy >= h) sy = h - 1;
++                    const uint8_t *s = rgba + ((size_t) sy * w + sx) * 4;
++                    int o = (y * 4 + x) * 2;
++                    blk[o] = s[3]; blk[o + 1] = s[0];          /* plano A,R */
++                    blk[32 + o] = s[1]; blk[32 + o + 1] = s[2]; /* plano G,B */
++                }
++            }
++        }
++    }
++    DCFlushRange(t->data, size);
++    GX_InvalidateTexAll();
++}
++
++static void set_sampler_parameters(int sampler, bool linear, uint32_t cms, uint32_t cmt) {
++    struct WiiTex *t = &textures[cur_tex[sampler]];
++    t->linear = linear; t->cms = cms; t->cmt = cmt;
++}
++
++static void set_depth_test(bool v) { depth_test = v; }
++static void set_depth_mask(bool v) { depth_mask = v; }
++static void set_zmode_decal(bool v) { zmode_decal = v; }
++static void set_use_alpha(bool v) { use_alpha = v; }
++
++static void set_viewport(int x, int y, int w, int h) {
++    float sx = 640.0f / (float) wii_logical_w;
++    float top = (float) wii_logical_h - (float) (y + h);
++    GX_SetViewport(x * sx, top, w * sx, h, 0.0f, 1.0f);
++}
++
++static void set_scissor(int x, int y, int w, int h) {
++    float sx = 640.0f / (float) wii_logical_w;
++    int top = (int) wii_logical_h - (y + h);
++    int x0 = (int) (x * sx), x1 = (int) ((x + w) * sx);
++    int y0 = top, y1 = top + h;
++    if (x0 < 0) x0 = 0;
++    if (y0 < 0) y0 = 0;
++    if (x1 > 640) x1 = 640;
++    if (y1 > 480) y1 = 480;
++    if (x1 <= x0 || y1 <= y0) { x0 = y0 = 0; x1 = y1 = 1; }
++    GX_SetScissor(x0, y0, x1 - x0, y1 - y0);
++}
++
++/* ------------------------------------------------------------------ TEV */
++struct StageIn { uint8_t a, b, c, d; };
++
++/* Origen de cada "item" del combinador: color y alfa */
++struct Srcs {
++    uint8_t in_c[4], in_a[4];     /* SHADER_INPUT_1..4 -> GX_CC_* / GX_CA_* */
++    uint8_t t0_c, t0_a, t1_c, t1_a;
++};
++
++static uint8_t map_color(const struct Srcs *s, int item) {
++    switch (item) {
++        case SHADER_0: return GX_CC_ZERO;
++        case SHADER_INPUT_1: return s->in_c[0];
++        case SHADER_INPUT_2: return s->in_c[1];
++        case SHADER_INPUT_3: return s->in_c[2];
++        case SHADER_INPUT_4: return s->in_c[3];
++        case SHADER_TEXEL0: return s->t0_c;
++        case SHADER_TEXEL0A: return s->t0_a;   /* alfa usado como color (difusion) */
++        case SHADER_TEXEL1: return s->t1_c;
++    }
++    return GX_CC_ZERO;
++}
++
++static uint8_t map_alpha(const struct Srcs *s, int item) {
++    switch (item) {
++        case SHADER_0: return GX_CA_ZERO;
++        case SHADER_INPUT_1: return s->in_a[0];
++        case SHADER_INPUT_2: return s->in_a[1];
++        case SHADER_INPUT_3: return s->in_a[2];
++        case SHADER_INPUT_4: return s->in_a[3];
++        case SHADER_TEXEL0:
++        case SHADER_TEXEL0A: return s->t0_a == GX_CC_A1 ? GX_CA_A1 : GX_CA_TEXA;
++        case SHADER_TEXEL1: return GX_CA_TEXA;
++    }
++    return GX_CA_ZERO;
++}
++
++/* Genera hasta 2 etapas (A,B,C,D) para (A-B)*C+D segun el modo.  Devuelve cuantas etapas. */
++static int build_formula(const uint8_t c[4], bool single, bool mul, bool mix, bool alpha, const struct Srcs *s,
++                         struct StageIn st[2], uint8_t sub[2]) {
++    uint8_t Z = alpha ? GX_CA_ZERO : GX_CC_ZERO;
++    uint8_t PREV = alpha ? GX_CA_APREV : GX_CC_CPREV;
++    uint8_t A = alpha ? map_alpha(s, c[0]) : map_color(s, c[0]);
++    uint8_t B = alpha ? map_alpha(s, c[1]) : map_color(s, c[1]);
++    uint8_t C = alpha ? map_alpha(s, c[2]) : map_color(s, c[2]);
++    uint8_t D = alpha ? map_alpha(s, c[3]) : map_color(s, c[3]);
++    sub[0] = sub[1] = 0;
++    if (single) { st[0] = (struct StageIn){Z, Z, Z, D}; return 1; }
++    if (mul)    { st[0] = (struct StageIn){Z, A, C, Z}; return 1; }     /* d + (1-c)*0 + c*A */
++    if (mix)    { st[0] = (struct StageIn){B, A, C, Z}; return 1; }     /* B + C*(A-B) */
++    st[0] = (struct StageIn){B, Z, Z, A}; sub[0] = 1;                    /* A - B */
++    st[1] = (struct StageIn){Z, PREV, C, D};                             /* D + C*(A-B) */
++    return 2;
++}
++
++static void set_stage(int stage, const struct StageIn *cs, bool csub, uint8_t cout,
++                      const struct StageIn *as, bool asub, uint8_t aout) {
++    GX_SetTevColorIn(stage, cs->a, cs->b, cs->c, cs->d);
++    GX_SetTevColorOp(stage, csub ? GX_TEV_SUB : GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, cout);
++    GX_SetTevAlphaIn(stage, as->a, as->b, as->c, as->d);
++    GX_SetTevAlphaOp(stage, asub ? GX_TEV_SUB : GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, aout);
++}
++
++static GXColor color_from(const float *v, bool alpha) {
++    GXColor c;
++    float r = v[0], g = v[1], b = v[2], a = alpha ? v[3] : 1.0f;
++    c.r = r < 0 ? 0 : r > 1 ? 255 : (uint8_t) (r * 255.0f + 0.5f);
++    c.g = g < 0 ? 0 : g > 1 ? 255 : (uint8_t) (g * 255.0f + 0.5f);
++    c.b = b < 0 ? 0 : b > 1 ? 255 : (uint8_t) (b * 255.0f + 0.5f);
++    c.a = a < 0 ? 0 : a > 1 ? 255 : (uint8_t) (a * 255.0f + 0.5f);
++    return c;
++}
++
++struct DrawCfg {
++    int chan0_in, chan1_in;   /* indice de input con color por vertice, o -1 */
++    bool fog_on;
++    bool textured;
++};
++
++static void bind_texture(int tile, int map) {
++    struct WiiTex *t = &textures[cur_tex[tile]];
++    static GXTexObj obj[2];
++    if (!t->data) return;
++    uint8_t wrap_s = t->cms & 2 ? GX_CLAMP : (t->cms & 1 ? GX_MIRROR : GX_REPEAT);
++    uint8_t wrap_t = t->cmt & 2 ? GX_CLAMP : (t->cmt & 1 ? GX_MIRROR : GX_REPEAT);
++    bool pow2 = !(t->w & (t->w - 1)) && !(t->h & (t->h - 1));
++    if (!pow2) { wrap_s = GX_CLAMP; wrap_t = GX_CLAMP; }
++    GX_InitTexObj(&obj[tile], t->data, t->w, t->h, GX_TF_RGBA8, wrap_s, wrap_t, GX_FALSE);
++    GX_InitTexObjLOD(&obj[tile], t->linear ? GX_LINEAR : GX_NEAR, t->linear ? GX_LINEAR : GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
++    GX_LoadTexObj(&obj[tile], map);
++}
++
++static void setup_draw(struct ShaderProgram *p, const float *v0, bool varying[4], struct DrawCfg *cfg, bool edge) {
++    const struct CCFeatures *cc = &p->cc;
++    int nin = cc->num_inputs;
++    cfg->chan0_in = cfg->chan1_in = -1;
++    cfg->fog_on = cc->opt_fog;
++    cfg->textured = cc->used_textures[0] || cc->used_textures[1];
++
++    for (int i = 0; i < nin; i++) {
++        if (!varying[i]) continue;
++        if (cfg->chan0_in < 0) cfg->chan0_in = i;
++        else if (cfg->chan1_in < 0 && !cfg->fog_on) cfg->chan1_in = i;
++    }
++
++    /* registros TEV libres para constantes: REG0, REG2, REG1 (REG1 se reserva si hay 2 texturas) */
++    bool two_tex = cc->used_textures[0] && cc->used_textures[1];
++    uint8_t regs[3] = {GX_TEVREG0, GX_TEVREG2, GX_TEVREG1};
++    int nregs = two_tex ? 2 : 3, ri = 0;
++    struct Srcs s;
++    memset(&s, 0, sizeof(s));
++    int stage = 0;
++    int pre_copy_chan1 = -1; uint8_t pre_reg = 0;
++
++    for (int i = 0; i < nin; i++) {
++        s.in_c[i] = GX_CC_ZERO; s.in_a[i] = GX_CA_ZERO;
++        if (i == cfg->chan0_in) { s.in_c[i] = GX_CC_RASC; s.in_a[i] = GX_CA_RASA; continue; }
++        if (ri >= nregs) continue;
++        uint8_t reg = regs[ri++];
++        uint8_t k = reg == GX_TEVREG0 ? 0 : reg == GX_TEVREG1 ? 1 : 2;
++        s.in_c[i] = GX_CC_C0 + 2 * k; s.in_a[i] = GX_CA_A0 + k;
++        if (i == cfg->chan1_in) { pre_copy_chan1 = i; pre_reg = reg; }
++        else GX_SetTevColor(reg, color_from(v0 + p->off_in[i], cc->opt_alpha));
++    }
++
++    /* textura(s) */
++    int map0 = cc->used_textures[0] ? GX_TEXMAP0 : GX_TEXMAP1;
++    if (cc->used_textures[0]) bind_texture(0, GX_TEXMAP0);
++    if (cc->used_textures[1]) bind_texture(1, GX_TEXMAP1);
++    s.t0_c = GX_CC_TEXC; s.t0_a = GX_CC_TEXA; s.t1_c = GX_CC_TEXC; s.t1_a = GX_CC_TEXA;
++    GX_SetNumTexGens(cfg->textured ? 1 : 0);
++    if (cfg->textured) GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
++
++    uint8_t chan0 = cfg->chan0_in >= 0 ? GX_COLOR0A0 : GX_COLORNULL;
++    GX_SetNumChans(cfg->chan1_in >= 0 || cfg->fog_on ? 2 : 1);
++    GX_SetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHTNULL, GX_DF_NONE, GX_AF_NONE);
++    GX_SetChanCtrl(GX_COLOR1A1, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHTNULL, GX_DF_NONE, GX_AF_NONE);
++
++    struct StageIn pass = {GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO};
++    struct StageIn apass = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO};
++
++    if (two_tex) {                      /* etapa previa: textura 0 -> REG1 */
++        struct StageIn c = {GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC};
++        struct StageIn a = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA};
++        GX_SetTevOrder(stage, GX_TEXCOORD0, GX_TEXMAP0, GX_COLORNULL);
++        set_stage(stage, &c, false, GX_TEVREG1, &a, false, GX_TEVREG1);
++        s.t0_c = GX_CC_C1; s.t0_a = GX_CC_A1;
++        stage++;
++    }
++    if (pre_copy_chan1 >= 0) {          /* etapa previa: color por vertice 2 -> registro */
++        struct StageIn c = {GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC};
++        struct StageIn a = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA};
++        GX_SetTevOrder(stage, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR1A1);
++        set_stage(stage, &c, false, pre_reg, &a, false, pre_reg);
++        stage++;
++    }
++
++    struct StageIn cs[2], as[2];
++    uint8_t csub[2], asub[2];
++    int nc = build_formula(cc->c[0], cc->do_single[0], cc->do_multiply[0], cc->do_mix[0], false, &s, cs, csub);
++    int na = cc->opt_alpha ? build_formula(cc->c[1], cc->do_single[1], cc->do_multiply[1], cc->do_mix[1], true, &s, as, asub) : 1;
++    if (!cc->opt_alpha) { as[0] = (struct StageIn){GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO}; asub[0] = 0; }
++    if (cc->opt_alpha && cc->color_alpha_same) { /* misma formula: reusa */ }
++    int n = nc > na ? nc : na;
++    for (int k = 0; k < n; k++) {
++        int ci = k - (n - nc), ai = k - (n - na);       /* alinea al final */
++        const struct StageIn *cp = ci >= 0 ? &cs[ci] : &pass;
++        const struct StageIn *ap = ai >= 0 ? &as[ai] : &apass;
++        bool csb = ci >= 0 ? csub[ci] : false, asb = ai >= 0 ? asub[ai] : false;
++        GX_SetTevOrder(stage, cfg->textured ? GX_TEXCOORD0 : GX_TEXCOORDNULL,
++                       cfg->textured ? map0 : GX_TEXMAP_NULL, chan0);
++        if (two_tex) GX_SetTevOrder(stage, GX_TEXCOORD0, GX_TEXMAP1, chan0);
++        set_stage(stage, cp, csb, GX_TEVPREV, ap, asb, GX_TEVPREV);
++        stage++;
++    }
++    if (cfg->fog_on) {                  /* mezcla de niebla: lerp(prev, fog.rgb, fog.a) */
++        struct StageIn c = {GX_CC_CPREV, GX_CC_RASC, GX_CC_RASA, GX_CC_ZERO};
++        struct StageIn a = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV};
++        GX_SetTevOrder(stage, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR1A1);
++        set_stage(stage, &c, false, GX_TEVPREV, &a, false, GX_TEVPREV);
++        stage++;
++    }
++    GX_SetNumTevStages(stage);
++
++    /* alfa: borde de textura = prueba alfa; si no, mezcla */
++    if (edge && cc->opt_alpha) {
++        GX_SetAlphaCompare(GX_GREATER, 77, GX_AOP_AND, GX_ALWAYS, 0);
++        GX_SetZCompLoc(GX_FALSE);
++        GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
++    } else {
++        GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
++        GX_SetZCompLoc(GX_TRUE);
++        if (use_alpha && cc->opt_alpha)
++            GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
++        else
++            GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
++    }
++
++    /* descriptor de vertices */
++    GX_ClearVtxDesc();
++    GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
++    if (cfg->chan0_in >= 0) GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
++    if (cfg->chan1_in >= 0 || cfg->fog_on) GX_SetVtxDesc(GX_VA_CLR1, GX_DIRECT);
++    if (cfg->textured) GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
++    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
++    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
++    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR1, GX_CLR_RGBA, GX_RGBA8, 0);
++    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
++}
++
++static void load_projection(bool ortho) {
++    Mtx44 m;
++    memset(m, 0, sizeof(m));
++    if (ortho) {
++        guOrtho(m, 1.0f, -1.0f, -1.0f, 1.0f, 0.0f, 1.0f);   /* z en [0,1] -> Z = -z */
++        GX_LoadProjectionMtx(m, GX_ORTHOGRAPHIC);
++    } else {
++        /* x' = x, y' = y, z' = e*Z + f, w' = -Z   (Z = -w) */
++        float n = PERSP_NEAR, f = PERSP_FAR;
++        m[0][0] = 1.0f; m[1][1] = 1.0f;
++        m[2][2] = -f / (f - n);
++        m[2][3] = -(f * n) / (f - n);
++        m[3][2] = -1.0f;
++        GX_LoadProjectionMtx(m, GX_PERSPECTIVE);
++    }
++}
++
++static inline uint8_t f2b(float v) { return v <= 0 ? 0 : v >= 1 ? 255 : (uint8_t) (v * 255.0f + 0.5f); }
++
++static void draw_triangles(float buf[], size_t len, size_t num_tris) {
++    (void) len;
++    struct ShaderProgram *p = cur_prg;
++    if (!p || num_tris == 0) return;
++    size_t nf = p->num_floats, nv = num_tris * 3;
++    const struct CCFeatures *cc = &p->cc;
++
++    /* 2D (w == 1 en todos) o 3D */
++    bool ortho = true;
++    for (size_t i = 0; i < nv; i++) if (buf[i * nf + 3] != 1.0f) { ortho = false; break; }
++
++    /* inputs que varian entre vertices */
++    bool varying[4] = {false, false, false, false};
++    int comps = cc->opt_alpha ? 4 : 3;
++    for (int k = 0; k < cc->num_inputs; k++)
++        for (size_t i = 1; i < nv && !varying[k]; i++)
++            for (int c = 0; c < comps; c++)
++                if (buf[i * nf + p->off_in[k] + c] != buf[p->off_in[k] + c]) { varying[k] = true; break; }
++
++    struct DrawCfg cfg;
++    setup_draw(p, buf, varying, &cfg, cc->opt_texture_edge);
++
++    GX_SetZMode(depth_test ? GX_TRUE : GX_FALSE, GX_LEQUAL, depth_mask ? GX_TRUE : GX_FALSE);
++    GX_SetCoPlanar(zmode_decal ? GX_ENABLE : GX_DISABLE);
++    load_projection(ortho);
++
++    GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16) nv);
++    for (size_t i = 0; i < nv; i++) {
++        const float *v = buf + i * nf;
++        if (ortho) GX_Position3f32(v[0], v[1], -(v[2] * 0.5f + 0.5f));
++        else       GX_Position3f32(v[0], v[1], -v[3]);
++        if (cfg.chan0_in >= 0) {
++            const float *c = v + p->off_in[cfg.chan0_in];
++            GX_Color4u8(f2b(c[0]), f2b(c[1]), f2b(c[2]), cc->opt_alpha ? f2b(c[3]) : 255);
++        }
++        if (cfg.chan1_in >= 0) {
++            const float *c = v + p->off_in[cfg.chan1_in];
++            GX_Color4u8(f2b(c[0]), f2b(c[1]), f2b(c[2]), cc->opt_alpha ? f2b(c[3]) : 255);
++        } else if (cfg.fog_on) {
++            const float *f = v + p->off_fog;
++            GX_Color4u8(f2b(f[0]), f2b(f[1]), f2b(f[2]), f2b(f[3]));
++        }
++        if (cfg.textured) GX_TexCoord2f32(v[p->off_tex], v[p->off_tex + 1]);
++    }
++    GX_End();
++}
++
++/* ------------------------------------------------------------------ init / frame */
++static void *gx_fifo;
++
++static void rapi_init(void) {
++    gx_fifo = memalign(32, FIFO_SIZE);
++    memset(gx_fifo, 0, FIFO_SIZE);
++    GX_Init(gx_fifo, FIFO_SIZE);
++    GXColor bg = {0, 0, 0, 255};
++    GX_SetCopyClear(bg, GX_MAX_Z24);
++    GX_SetViewport(0, 0, wii_rmode->fbWidth, wii_rmode->efbHeight, 0, 1);
++    GX_SetDispCopyYScale((f32) wii_rmode->xfbHeight / (f32) wii_rmode->efbHeight);
++    GX_SetScissor(0, 0, wii_rmode->fbWidth, wii_rmode->efbHeight);
++    GX_SetDispCopySrc(0, 0, wii_rmode->fbWidth, wii_rmode->efbHeight);
++    GX_SetDispCopyDst(wii_rmode->fbWidth, wii_rmode->xfbHeight);
++    GX_SetCopyFilter(wii_rmode->aa, wii_rmode->sample_pattern, GX_TRUE, wii_rmode->vfilter);
++    GX_SetFieldMode(wii_rmode->field_rendering, wii_rmode->viHeight == 2 * wii_rmode->xfbHeight ? GX_ENABLE : GX_DISABLE);
++    GX_SetPixelFmt(GX_PF_RGB8_Z24, GX_ZC_LINEAR);
++    GX_SetCullMode(GX_CULL_NONE);
++    GX_SetDispCopyGamma(GX_GM_1_0);
++    GX_SetColorUpdate(GX_TRUE);
++    GX_SetAlphaUpdate(GX_FALSE);
++    Mtx id;
++    guMtxIdentity(id);
++    GX_LoadPosMtxImm(id, GX_PNMTX0);
++    GX_SetCurrentMtx(GX_PNMTX0);
++    GX_SetNumTexGens(0);
++    GX_CopyDisp(wii_xfb[0], GX_TRUE);   /* primer borrado */
++    GX_Flush();
++}
++
++static void rapi_on_resize(void) {}
++static void rapi_start_frame(void) {
++    GX_SetViewport(0, 0, 640, 480, 0, 1);
++    GX_SetScissor(0, 0, 640, 480);
++    GX_SetColorUpdate(GX_TRUE);
++    GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
++    GX_InvalidateTexAll();
++}
++static void rapi_end_frame(void) {}
++static void rapi_finish_render(void) {}
++
++struct GfxRenderingAPI gfx_wii_rapi = {
++    z_is_from_0_to_1, unload_shader, load_shader, create_and_load_new_shader, lookup_shader, shader_get_info,
++    new_texture, select_texture, upload_texture, set_sampler_parameters, set_depth_test, set_depth_mask,
++    set_zmode_decal, set_viewport, set_scissor, set_use_alpha, draw_triangles, rapi_init, rapi_on_resize,
++    rapi_start_frame, rapi_end_frame, rapi_finish_render,
++};
++
++/* ------------------------------------------------------------------ gestor de ventana */
++static int fb_index;
++
++static void wm_init(const char *name, bool fs) {
++    (void) name; (void) fs;
++    wii_logical_h = 480;
++    wii_logical_w = wii_widescreen ? 853 : 640;   /* 16:9 sin estirar: el juego ensancha el campo de vision */
++}
++static void wm_set_keyboard_callbacks(bool (*d)(int), bool (*u)(int), void (*a)(void)) { (void) d; (void) u; (void) a; }
++static void wm_set_fullscreen_changed_callback(void (*cb)(bool)) { (void) cb; }
++static void wm_set_fullscreen(bool e) { (void) e; }
++static void wm_main_loop(void (*run_one_game_iter)(void)) {
++    run_one_game_iter();
++    VIDEO_WaitVSync();   /* 60 Hz / 2 = 30 fps como en N64 */
++}
++static void wm_get_dimensions(uint32_t *w, uint32_t *h) { *w = wii_logical_w; *h = wii_logical_h; }
++static void wm_handle_events(void) { wii_input_poll(); if (wii_home_pressed()) exit(0); }
++static bool wm_start_frame(void) { return true; }
++static void wm_swap_begin(void) {
++    GX_DrawDone();
++    fb_index ^= 1;
++    GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
++    GX_SetColorUpdate(GX_TRUE);
++    GX_CopyDisp(wii_xfb[fb_index], GX_TRUE);
++}
++static void wm_swap_end(void) {
++    VIDEO_SetNextFramebuffer(wii_xfb[fb_index]);
++    VIDEO_Flush();
++    VIDEO_WaitVSync();
++}
++static double wm_get_time(void) { return (double) ticks_to_millisecs(gettime()) / 1000.0; }
++
++struct GfxWindowManagerAPI gfx_wii_wm = {
++    wm_init, wm_set_keyboard_callbacks, wm_set_fullscreen_changed_callback, wm_set_fullscreen, wm_main_loop,
++    wm_get_dimensions, wm_handle_events, wm_start_frame, wm_swap_begin, wm_swap_end, wm_get_time,
++};
+diff --git a/src/pc/wii/wii_input.c b/src/pc/wii/wii_input.c
+new file mode 100644
+index 0000000..6495e86
+--- /dev/null
++++ b/src/pc/wii/wii_input.c
+@@ -0,0 +1,121 @@
++/* Controles Wii -> pad N64.  P1/P2 = canal 0/1 de Wiimote (+Nunchuk / Classic) o mando de GameCube. */
++#include <gccore.h>
++#include <wiiuse/wpad.h>
++#include <math.h>
++#include <stdint.h>
++#include "wii_platform.h"
++
++#define N64_A      0x8000
++#define N64_B      0x4000
++#define N64_Z      0x2000
++#define N64_START  0x1000
++#define N64_L      0x0020
++#define N64_R      0x0010
++#define N64_CUP    0x0008
++#define N64_CDOWN  0x0004
++#define N64_CLEFT  0x0002
++#define N64_CRIGHT 0x0001
++
++struct WiiPad { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; };
++
++static bool home;
++
++void wii_input_init(void) {
++    WPAD_Init();
++    PAD_Init();
++    WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
++}
++
++void wii_input_poll(void) {
++    WPAD_ScanPads();
++    PAD_ScanPads();
++    home = (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) || (WPAD_ButtonsDown(0) & WPAD_CLASSIC_BUTTON_HOME)
++           || (PAD_ButtonsHeld(0) & (PAD_BUTTON_START | PAD_TRIGGER_L | PAD_TRIGGER_R)) == (PAD_BUTTON_START | PAD_TRIGGER_L | PAD_TRIGGER_R);
++}
++
++bool wii_home_pressed(void) { return home; }
++
++static int8_t clamp80(float v) { return v > 80 ? 80 : v < -80 ? -80 : (int8_t) v; }
++
++static void stick_from_js(const struct joystick_t *js, float *x, float *y) {
++    float rad = js->ang * (float) M_PI / 180.0f;   /* 0 grados = arriba */
++    *x = sinf(rad) * js->mag * 80.0f;
++    *y = cosf(rad) * js->mag * 80.0f;
++}
++
++void wii_read_pad(int idx, void *out) {
++    struct WiiPad *pad = out;
++    uint16_t b = 0;
++    float sx = 0, sy = 0;
++    pad->button = 0; pad->stick_x = 0; pad->stick_y = 0; pad->errnum = 0;
++
++    u32 type;
++    if (WPAD_Probe(idx, &type) == WPAD_ERR_NONE) {
++        u32 h = WPAD_ButtonsHeld(idx);
++        if (type == WPAD_EXP_NUNCHUK || (WPAD_Data(idx)->exp.type == WPAD_EXP_NUNCHUK)) {
++            const WPADData *d = WPAD_Data(idx);
++            stick_from_js(&d->exp.nunchuk.js, &sx, &sy);
++            if (h & WPAD_BUTTON_A) b |= N64_A;
++            if (h & WPAD_BUTTON_B) b |= N64_B;
++            if (h & WPAD_NUNCHUK_BUTTON_Z) b |= N64_Z;
++            if (h & WPAD_NUNCHUK_BUTTON_C) b |= N64_R;
++            if (h & WPAD_BUTTON_PLUS) b |= N64_START;
++            if (h & WPAD_BUTTON_MINUS) b |= N64_L;
++            if (h & WPAD_BUTTON_UP) b |= N64_CUP;
++            if (h & WPAD_BUTTON_DOWN) b |= N64_CDOWN;
++            if (h & WPAD_BUTTON_LEFT) b |= N64_CLEFT;
++            if (h & WPAD_BUTTON_RIGHT) b |= N64_CRIGHT;
++        } else if (WPAD_Data(idx)->exp.type == WPAD_EXP_CLASSIC) {
++            const WPADData *d = WPAD_Data(idx);
++            stick_from_js(&d->exp.classic.ljs, &sx, &sy);
++            float cx, cy;
++            stick_from_js(&d->exp.classic.rjs, &cx, &cy);
++            if (cy > 40) b |= N64_CUP;
++            if (cy < -40) b |= N64_CDOWN;
++            if (cx < -40) b |= N64_CLEFT;
++            if (cx > 40) b |= N64_CRIGHT;
++            if (h & WPAD_CLASSIC_BUTTON_A) b |= N64_A;
++            if (h & WPAD_CLASSIC_BUTTON_B) b |= N64_B;
++            if (h & (WPAD_CLASSIC_BUTTON_ZL | WPAD_CLASSIC_BUTTON_ZR)) b |= N64_Z;
++            if (h & WPAD_CLASSIC_BUTTON_FULL_R) b |= N64_R;
++            if (h & WPAD_CLASSIC_BUTTON_FULL_L) b |= N64_L;
++            if (h & WPAD_CLASSIC_BUTTON_PLUS) b |= N64_START;
++            if (h & WPAD_CLASSIC_BUTTON_UP) sy = 80;
++            if (h & WPAD_CLASSIC_BUTTON_DOWN) sy = -80;
++            if (h & WPAD_CLASSIC_BUTTON_LEFT) sx = -80;
++            if (h & WPAD_CLASSIC_BUTTON_RIGHT) sx = 80;
++        } else {
++            /* Wiimote solo, de lado (1 y 2 a la derecha): cruz = palanca, 2 = A, 1 = B */
++            if (h & WPAD_BUTTON_UP) sx = -80;
++            if (h & WPAD_BUTTON_DOWN) sx = 80;
++            if (h & WPAD_BUTTON_LEFT) sy = -80;
++            if (h & WPAD_BUTTON_RIGHT) sy = 80;
++            if (h & WPAD_BUTTON_2) b |= N64_A;
++            if (h & WPAD_BUTTON_1) b |= N64_B;
++            if (h & WPAD_BUTTON_A) b |= N64_Z;
++            if (h & WPAD_BUTTON_B) b |= N64_R;
++            if (h & WPAD_BUTTON_PLUS) b |= N64_START;
++            if (h & WPAD_BUTTON_MINUS) b |= N64_CUP;
++        }
++    }
++
++    u16 g = PAD_ButtonsHeld(idx);        /* mando de GameCube (se suma al Wiimote) */
++    if (PAD_ButtonsHeld(idx) || PAD_StickX(idx) || PAD_StickY(idx)) {
++        if (g & PAD_BUTTON_A) b |= N64_A;
++        if (g & PAD_BUTTON_B) b |= N64_B;
++        if (g & PAD_TRIGGER_Z) b |= N64_R;
++        if (g & PAD_TRIGGER_R) b |= N64_Z;
++        if (g & PAD_TRIGGER_L) b |= N64_Z;
++        if (g & PAD_BUTTON_START) b |= N64_START;
++        if (g & PAD_BUTTON_X) b |= N64_B;
++        int cx = PAD_SubStickX(idx), cy = PAD_SubStickY(idx);
++        if (cy > 40) b |= N64_CUP;
++        if (cy < -40) b |= N64_CDOWN;
++        if (cx < -40) b |= N64_CLEFT;
++        if (cx > 40) b |= N64_CRIGHT;
++        if (PAD_StickX(idx) || PAD_StickY(idx)) { sx = PAD_StickX(idx) * 80.0f / 72.0f; sy = PAD_StickY(idx) * 80.0f / 72.0f; }
++    }
++    pad->button = b;
++    pad->stick_x = clamp80(sx);
++    pad->stick_y = clamp80(sy);
++}
+diff --git a/src/pc/wii/wii_main.c b/src/pc/wii/wii_main.c
+new file mode 100644
+index 0000000..7733a11
+--- /dev/null
++++ b/src/pc/wii/wii_main.c
+@@ -0,0 +1,248 @@
++/* Punto de entrada Wii: video, SD/USB, lanzador (busca la ROM, extrae assets con barra de progreso)
++ * y luego arranca el juego (main_func de pc_main.c).
++ *
++ * Carpetas junto a boot.dol:  sm64/ (la ROM, cualquier nombre/formato), extracted/ (assets), saves/ (partidas). */
++#include <gccore.h>
++#include <fat.h>
++#include <malloc.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <ogc/conf.h>
++#include <wiiuse/wpad.h>
++#include "rom_loader.h"
++#include "wii_platform.h"
++
++extern void main_func(void);
++
++GXRModeObj *wii_rmode;
++void *wii_xfb[2];
++bool wii_widescreen;
++
++#define ROM_SIZE_US 0x800000
++#define TBL_ENTRY 28
++
++void wii_video_init(void) {
++    VIDEO_Init();
++    CONF_Init();
++    wii_input_init();
++    wii_rmode = VIDEO_GetPreferredMode(NULL);
++    wii_widescreen = CONF_GetAspectRatio() == CONF_ASPECT_16_9;
++    if (wii_widescreen) {                       /* ocupa toda la pantalla 16:9 */
++        wii_rmode->viWidth = 678;
++        wii_rmode->viXOrigin = (VI_MAX_WIDTH_NTSC - 678) / 2;
++    }
++    VIDEO_Configure(wii_rmode);
++    wii_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(wii_rmode));
++    wii_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(wii_rmode));
++    console_init(wii_xfb[0], 20, 20, wii_rmode->fbWidth, wii_rmode->xfbHeight, wii_rmode->fbWidth * VI_DISPLAY_PIX_SZ);
++    VIDEO_ClearFrameBuffer(wii_rmode, wii_xfb[0], COLOR_BLACK);
++    VIDEO_ClearFrameBuffer(wii_rmode, wii_xfb[1], COLOR_BLACK);
++    VIDEO_SetNextFramebuffer(wii_xfb[0]);
++    VIDEO_SetBlack(false);
++    VIDEO_Flush();
++    VIDEO_WaitVSync();
++    if (wii_rmode->viTVMode & VI_NON_INTERLACE) VIDEO_WaitVSync();
++}
++
++static void wait_button(void) {
++    for (;;) {
++        WPAD_ScanPads();
++        PAD_ScanPads();
++        if (WPAD_ButtonsDown(0) || PAD_ButtonsDown(0)) return;
++        VIDEO_WaitVSync();
++    }
++}
++
++void wii_fatal(const char *fmt, ...) {
++    va_list ap;
++    printf("\n\n  ERROR: ");
++    va_start(ap, fmt);
++    vprintf(fmt, ap);
++    va_end(ap);
++    printf("\n\n  Pulsa cualquier boton para salir.\n");
++    wait_button();
++    exit(1);
++}
++
++static void mkpath(const char *file) {
++    char tmp[256];
++    snprintf(tmp, sizeof(tmp), "%s", file);
++    for (char *p = tmp + 1; *p; p++) {
++        if (*p == '/') { *p = 0; mkdir(tmp, 0777); *p = '/'; }
++    }
++}
++
++static void bar(const char *label, int cur, int total) {
++    static int last = -1;
++    int pct = total ? (int) ((long long) cur * 100 / total) : 100;
++    if (pct == last && cur != total) return;
++    last = pct;
++    char b[41];
++    int fill = pct * 40 / 100;
++    for (int i = 0; i < 40; i++) b[i] = i < fill ? '#' : '.';
++    b[40] = 0;
++    printf("\r  %s [%s] %3d%%", label, b, pct);
++    fflush(stdout);
++    if (cur == total) { printf("\n"); last = -1; }
++}
++
++static uint32_t rd32(const uint8_t *p) { return ((uint32_t) p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]; }
++
++struct Ent { uint32_t kind, addr, size, addr2, src, pos, name_off; };
++
++static uint8_t *tbl; static uint32_t tbl_count; static const char *tbl_names;
++
++static void load_table(void) {
++    FILE *f = fopen("assets.tbl", "rb");
++    if (!f) wii_fatal("Falta assets.tbl junto a boot.dol (reinstala la app).");
++    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
++    tbl = malloc(n);
++    if (!tbl || fread(tbl, 1, n, f) != (size_t) n) wii_fatal("No se pudo leer assets.tbl");
++    fclose(f);
++    if (memcmp(tbl, "SMA2", 4) != 0) wii_fatal("assets.tbl invalido");
++    tbl_count = rd32(tbl + 4);
++    tbl_names = (const char *) tbl + rd32(tbl + 8);
++}
++
++static struct Ent get_ent(uint32_t i) {
++    const uint8_t *p = tbl + 12 + i * TBL_ENTRY;
++    struct Ent e = { rd32(p), rd32(p + 4), rd32(p + 8), rd32(p + 12), rd32(p + 16), rd32(p + 20), rd32(p + 24) };
++    return e;
++}
++
++static void ent_path(const struct Ent *e, char *out, size_t n) {
++    snprintf(out, n, "extracted/%s.bin", tbl_names + e->name_off);
++}
++
++static bool assets_ready(void) {
++    FILE *f = fopen("extracted/.ok", "rb");
++    char buf[32] = {0};
++    if (!f) return false;
++    fread(buf, 1, sizeof(buf) - 1, f);
++    fclose(f);
++    char want[32];
++    snprintf(want, sizeof(want), "SMA2 %u", (unsigned) tbl_count);
++    return strcmp(buf, want) == 0;
++}
++
++static uint8_t *load_rom(size_t *len) {
++    char path[300];
++    if (rom_find_in_dir("sm64", path, sizeof(path)) != 0)
++        wii_fatal("No encuentro la ROM.\n  Copia tu ROM de Super Mario 64 (US) en la carpeta\n  sm64/ junto a boot.dol (.z64, .v64 o .n64, cualquier nombre).");
++    printf("  ROM: %s\n", path);
++    FILE *f = fopen(path, "rb");
++    if (!f) wii_fatal("No se pudo abrir la ROM.");
++    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
++    if (n != ROM_SIZE_US) wii_fatal("La ROM debe medir 8 MB (US). Tamano: %ld bytes.", n);
++    uint8_t *rom = memalign(32, n);
++    if (!rom) wii_fatal("Sin memoria para la ROM.");
++    size_t got = 0;
++    while (got < (size_t) n) {                       /* lectura por trozos para mostrar progreso */
++        size_t c = fread(rom + got, 1, 256 * 1024, f);
++        if (c == 0) break;
++        got += c;
++        bar("Leyendo ROM    ", (int) got, (int) n);
++    }
++    fclose(f);
++    if (got != (size_t) n) wii_fatal("Error leyendo la ROM.");
++    RomFormat fmt = rom_detect_format(rom);
++    if (fmt == ROM_FMT_UNKNOWN) wii_fatal("Formato de ROM no reconocido.");
++    if (rom_to_z64(rom, n, fmt) != 0) wii_fatal("No se pudo convertir la ROM.");
++    RomRegion r = rom_detect_region(rom, n);
++    if (r != ROM_REGION_US) wii_fatal("Esta version solo admite la ROM Super Mario 64 (US / NTSC-U).");
++    *len = n;
++    return rom;
++}
++
++/* ---- Extraccion: ROM -> extracted/ -------------------------------------------------- */
++static void extract_all(void) {
++    size_t rlen;
++    uint8_t *rom = load_rom(&rlen);
++    uint8_t *blk = NULL; size_t blk_cap = 0, blk_len = 0; uint32_t blk_src = 0xFFFFFFFF;
++    printf("\n  Preparando assets (esto solo ocurre la primera vez)...\n");
++    for (uint32_t i = 0; i < tbl_count; i++) {
++        struct Ent e = get_ent(i);
++        const uint8_t *data;
++        if (e.src == 0) {
++            if ((size_t) e.pos + e.size > rlen) wii_fatal("Entrada %u fuera de la ROM.", i);
++            data = rom + e.pos;
++        } else {
++            if (blk_src != e.src) {
++                uint32_t out = rd32(rom + e.src + 4);
++                if (out > blk_cap) { free(blk); blk = malloc(out); blk_cap = out; }
++                if (!blk) wii_fatal("Sin memoria para descomprimir.");
++                if (mio0_decode(rom + e.src, rlen - e.src, blk, blk_cap) < 0) wii_fatal("Bloque MIO0 invalido (%u).", i);
++                blk_src = e.src; blk_len = out;
++            }
++            if ((size_t) e.pos + e.size > blk_len) wii_fatal("Entrada %u fuera del bloque.", i);
++            data = blk + e.pos;
++        }
++        char path[300];
++        ent_path(&e, path, sizeof(path));
++        mkpath(path);
++        FILE *f = fopen(path, "wb");
++        if (!f || fwrite(data, 1, e.size, f) != e.size) wii_fatal("No se pudo escribir %s", path);
++        fclose(f);
++        bar("Compilando     ", (int) i + 1, (int) tbl_count);
++    }
++    free(blk); free(rom);
++    FILE *ok = fopen("extracted/.ok", "wb");
++    if (ok) { fprintf(ok, "SMA2 %u", (unsigned) tbl_count); fclose(ok); }
++}
++
++/* ---- Carga: extracted/ -> RAM del juego ---------------------------------------------- */
++static void load_all(void) {
++    printf("\n  Cargando juego...\n");
++    for (uint32_t i = 0; i < tbl_count; i++) {
++        struct Ent e = get_ent(i);
++        char path[300];
++        ent_path(&e, path, sizeof(path));
++        FILE *f = fopen(path, "rb");
++        if (!f) wii_fatal("Falta %s (borra la carpeta extracted para regenerarla).", path);
++        if (e.kind == 0) {
++            if (fread((void *) e.addr, 1, e.size, f) != e.size) wii_fatal("Archivo corrupto: %s", path);
++        } else {                                   /* skybox: mosaicos + tabla de 80 punteros */
++            uint32_t tiles = e.size - 80 * 4;
++            uint8_t tab[80 * 4];
++            if (fread((void *) e.addr, 1, tiles, f) != tiles || fread(tab, 1, sizeof(tab), f) != sizeof(tab))
++                wii_fatal("Archivo corrupto: %s", path);
++            uint32_t base = rd32(tab);
++            const uint8_t **list = (const uint8_t **) e.addr2;
++            for (int k = 0; k < 80; k++) list[k] = (const uint8_t *) e.addr + (rd32(tab + k * 4) - base);
++        }
++        fclose(f);
++        bar("Cargando       ", (int) i + 1, (int) tbl_count);
++    }
++}
++
++static void goto_app_dir(const char *argv0) {
++    char dir[256] = "";
++    if (argv0 && strchr(argv0, '/')) {
++        snprintf(dir, sizeof(dir), "%s", argv0);
++        char *s = strrchr(dir, '/');
++        if (s) *s = 0;
++    }
++    if (dir[0] && chdir(dir) == 0) return;
++    if (chdir("sd:/apps/sm64wii") == 0) return;
++    if (chdir("usb:/apps/sm64wii") == 0) return;
++}
++
++int main(int argc, char **argv) {
++    (void) argc;
++    wii_video_init();
++    printf("\x1b[2;0H");
++    printf("  Super Mario 64 - Wii (homebrew)\n  -------------------------------\n\n");
++    if (!fatInitDefault()) wii_fatal("No se pudo montar la SD/USB.");
++    goto_app_dir(argc > 0 ? argv[0] : NULL);
++    mkdir("sm64", 0777); mkdir("extracted", 0777); mkdir("saves", 0777);
++    load_table();
++    if (!assets_ready()) extract_all();
++    load_all();
++    printf("\n  Iniciando...\n");
++    main_func();
++    return 0;
++}
+diff --git a/src/pc/wii/wii_platform.h b/src/pc/wii/wii_platform.h
+new file mode 100644
+index 0000000..bdd9d1c
+--- /dev/null
++++ b/src/pc/wii/wii_platform.h
+@@ -0,0 +1,29 @@
++#ifndef WII_PLATFORM_H
++#define WII_PLATFORM_H
++/* Declaraciones compartidas de la capa Wii. Este header solo usa libogc / stdint
++ * (nunca los tipos de SM64), porque libogc y SM64 definen s32/u32 de forma distinta. */
++#include <gccore.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++extern GXRModeObj *wii_rmode;
++extern void *wii_xfb[2];
++extern bool wii_widescreen;
++
++void wii_video_init(void);
++void wii_input_init(void);
++void wii_input_poll(void);
++/* Rellena un OSContPad (mismo layout: u16 button; s8 stick_x; s8 stick_y; u8 errnum) del jugador idx (0 o 1). */
++void wii_read_pad(int idx, void *pad);
++void wii_fatal(const char *fmt, ...);
++bool wii_home_pressed(void);
++
++/* Definidos en wii_gfx.c / wii_audio.c; los usa pc_main.c */
++struct GfxWindowManagerAPI; struct GfxRenderingAPI; struct AudioAPI;
++extern struct GfxWindowManagerAPI gfx_wii_wm;
++extern struct GfxRenderingAPI gfx_wii_rapi;
++extern struct AudioAPI audio_wii;
++
++/* Resolucion "logica" que ve el juego: siempre 480 de alto; 640 (4:3) o 853 (16:9) de ancho. */
++extern uint32_t wii_logical_w, wii_logical_h;
++#endif
+diff --git a/src/pc/wii/wii_platform_game.h b/src/pc/wii/wii_platform_game.h
+new file mode 100644
+index 0000000..63d7269
+--- /dev/null
++++ b/src/pc/wii/wii_platform_game.h
+@@ -0,0 +1,11 @@
++#ifndef WII_PLATFORM_GAME_H
++#define WII_PLATFORM_GAME_H
++/* Funciones de la capa Wii visibles desde el codigo del juego (sin libogc). */
++void wii_input_init(void);
++void wii_input_poll(void);
++void wii_read_pad(int idx, void *pad);
++void wii_video_init(void);
++extern struct GfxWindowManagerAPI gfx_wii_wm;
++extern struct GfxRenderingAPI gfx_wii_rapi;
++extern struct AudioAPI audio_wii;
++#endif
+diff --git a/tools/wii_asset_tool.py b/tools/wii_asset_tool.py
+new file mode 100644
+index 0000000..49268f5
+--- /dev/null
++++ b/tools/wii_asset_tool.py
+@@ -0,0 +1,150 @@
++#!/usr/bin/env python3
++"""Herramienta de assets de SM64 Wii. Se ejecuta en CI y NO necesita la ROM.
++
++  gen   <repo> <build>             crea los placeholders (texturas, skyboxes, sonido, demos) del tamano correcto
++  table <repo> <elf> <nm> <out>    tras enlazar: crea assets.tbl (direcciones en RAM + origen en la ROM US)
++
++assets.tbl (big-endian)
++  'SMA2', u32 count, u32 name_table_off
++  count x { u32 kind, u32 addr, u32 size, u32 addr2, u32 src, u32 pos, u32 name_off }
++  kind 0 = copia directa  (src == 0: pos = offset en la ROM;  src != 0: bloque MIO0 en src, pos dentro del bloque)
++  kind 2 = skybox (addr = mosaicos, addr2 = ptrlist de 80 punteros; el blob termina con la tabla de 80 u32)
++"""
++import json, os, re, struct, subprocess, sys
++
++VER = "us"
++DECL = re.compile(r'(?:Texture|u8)\s+(\w+)\s*\[\s*\]\s*=\s*\{\s*$')
++INC = re.compile(r'#\s*include\s+"([^"]+\.inc\.c)"')
++SKIP = ("textures/skyboxes/", "levels/ending/cake", "sound/", "assets/demos/", "textures/ipl3_raw/")
++SKYBOXES = ["bbh", "bidw", "bitfs", "bits", "ccm", "cloud_floor", "clouds", "ssl", "water", "wdw"]
++# Bloques de sonido de la ROM US (offset, tamano) -> simbolo.  ctl/tbl salen de assets.json; el resto se midio con la ROM matching.
++SOUND = {
++    "gSoundDataADSR": ("@sound ctl us", None),
++    "gSoundDataRaw":  ("@sound tbl us", None),
++    "gMusicData":     (None, (0x7B0860, 0x1BDC0)),
++    "gBankSetsData":  (None, (0x7CC620, 0xA0)),
++}
++
++def load(repo):
++    with open(os.path.join(repo, "assets.json")) as f:
++        return json.load(f)
++
++def texture_assets(d):
++    out = {}
++    for k, v in d.items():
++        if k.startswith("@") or k.startswith(SKIP) or not k.endswith(".png"):
++            continue
++        out[k[:-4] + ".inc.c"] = (k, v)
++    return out
++
++def scan_sources(repo, assets):
++    found = {}
++    for root, _, files in os.walk(repo):
++        if "/build" in root or "/tools" in root:
++            continue
++        for fn in files:
++            if not fn.endswith((".c", ".h")):
++                continue
++            p = os.path.join(root, fn)
++            lines = open(p, errors="ignore").read().splitlines()
++            for i, ln in enumerate(lines):
++                m = INC.search(ln)
++                if m and m.group(1) in assets and i > 0:
++                    dm = DECL.search(lines[i - 1].strip())
++                    if dm:
++                        found[m.group(1)] = dm.group(1)
++    return found
++
++def sound_blocks(d):
++    out = {}
++    for sym, (key, fixed) in SOUND.items():
++        if key:
++            size, locs = d[key]
++            out[sym] = (locs[VER][0], size)
++        else:
++            out[sym] = fixed
++    return out
++
++def w(path, text):
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    with open(path, "w") as f:
++        f.write(text)
++
++def cmd_gen(repo, build):
++    d = load(repo)
++    n = 0
++    for inc, (png, v) in texture_assets(d).items():       # texturas: [N-1] = 0 fija el tamano del arreglo
++        body = "0\n" if inc.startswith("textures/crash_screen/") else f"[{v[2] - 1}] = 0\n"   # la fuente del crash es u32[64]
++        w(os.path.join(build, inc), body); n += 1
++    sb = sound_blocks(d)                                  # sonido
++    names = {"gSoundDataADSR": "sound_data.ctl", "gSoundDataRaw": "sound_data.tbl",
++             "gMusicData": "sequences.bin", "gBankSetsData": "bank_sets"}
++    for sym, (off, size) in sb.items():
++        w(os.path.join(build, "sound", names[sym] + ".inc.c"), f"[{size - 1}] = 0\n")
++    for s in SKYBOXES:                                    # skyboxes: mosaicos + lista de 80 punteros
++        size = d[f"textures/skyboxes/{s}.png"][0]
++        tiles = size - 80 * 4
++        w(os.path.join(build, "bin", f"{s}_skybox.c"),
++          '#include "types.h"\n#include "macros.h"\n'
++          f"ALIGNED8 u8 {s}_skybox_tiles[{tiles}];\n"
++          f"const u8 *{s}_skybox_ptrlist[80];\n")
++    cake = "".join(f"ALIGNED8 static const Texture cake_end_texture_{i}[] = {{ [3199] = 0 }};\n" for i in range(48))
++    w(os.path.join(build, "levels/ending/cake.inc.c"), cake)   # pastel del final: 48 mosaicos de 20x80 rgba16
++    for k, v in d.items():                                # demos: la conversion a C lee estos .bin del repo
++        if k.startswith("assets/demos/"):
++            p = os.path.join(repo, k); os.makedirs(os.path.dirname(p), exist_ok=True)
++            if not os.path.exists(p):
++                open(p, "wb").write(b"\0" * v[0])
++    print(f"placeholders: {n} texturas, {len(sb)} bloques de sonido, {len(SKYBOXES)} skyboxes")
++
++def cmd_table(repo, elf, nm, out):
++    d = load(repo)
++    assets = texture_assets(d)
++    found = scan_sources(repo, assets)
++    syms = {}
++    for ln in subprocess.check_output([nm, elf], text=True).splitlines():
++        p = ln.split()
++        if len(p) == 3:
++            syms.setdefault(p[2], int(p[0], 16))
++    ents = []   # (kind, addr, size, addr2, src, pos, name)
++    for inc, sym in found.items():
++        png, v = assets[inc]
++        pos = v[-1].get(VER)
++        if pos is None or sym not in syms:
++            continue
++        src, off = (0, pos[0]) if len(pos) == 1 else (pos[0], pos[1])
++        ents.append((0, syms[sym], v[2], 0, src, off, png[:-4]))
++    for sym, (off, size) in sound_blocks(d).items():
++        if sym in syms:
++            ents.append((0, syms[sym], size, 0, 0, off, "sound/" + sym))
++    for s in SKYBOXES:
++        key = f"textures/skyboxes/{s}.png"
++        size, locs = d[key]
++        src, off = locs[VER]
++        if f"{s}_skybox_tiles" in syms:
++            ents.append((2, syms[f"{s}_skybox_tiles"], size, syms[f"{s}_skybox_ptrlist"], src, off, "skybox/" + s))
++    csize, clocs = d["levels/ending/cake.png"]
++    csrc, coff = clocs[VER]
++    for i in range(48):
++        sym = f"cake_end_texture_{i}"
++        if sym in syms:
++            ents.append((0, syms[sym], 3200, 0, csrc, coff + i * 3200, f"cake/{i}"))
++    ents.sort(key=lambda e: (e[4], e[5]))               # agrupa por bloque MIO0
++    names, name_offs, blob = {}, [], b""
++    for e in ents:
++        name_offs.append(len(blob)); blob += e[6].encode() + b"\0"
++    head = 12 + len(ents) * 28
++    with open(out, "wb") as f:
++        f.write(b"SMA2" + struct.pack(">II", len(ents), head))
++        for e, no in zip(ents, name_offs):
++            f.write(struct.pack(">IIIIIII", e[0], e[1], e[2], e[3], e[4], e[5], no))
++        f.write(blob)
++    print(f"assets.tbl: {len(ents)} entradas")
++
++if __name__ == "__main__":
++    c = sys.argv[1]
++    if c == "gen": cmd_gen(sys.argv[2], sys.argv[3])
++    elif c == "table": cmd_table(*sys.argv[2:6])
++    elif c == "scan":
++        a = texture_assets(load(sys.argv[2])); f = scan_sources(sys.argv[2], a)
++        print(len(a), "texturas,", len(f), "con simbolo")
+diff --git a/wii/meta.xml b/wii/meta.xml
+new file mode 100644
+index 0000000..9d75c07
+--- /dev/null
++++ b/wii/meta.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
++<app version="1">
++  <name>Super Mario 64 Wii</name>
++  <coder>sm64-port</coder>
++  <version>0.1</version>
++  <release_date>20261108000000</release_date>
++  <short_description>Super Mario 64 nativo, 2 jugadores</short_description>
++  <long_description>Port de Super Mario 64 (sm64-port) para Wii. Pon tu ROM US en la carpeta sm64.</long_description>
++</app>
