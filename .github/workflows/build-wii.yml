@@ -18,6 +18,16 @@ jobs:
           apt-get update
           apt-get install -y build-essential python3 zip unzip git
 
+      - name: Configurar devkitPPC (PATH)
+        run: |
+          DK="${DEVKITPRO:-/opt/devkitpro}"
+          echo "DEVKITPRO=$DK" >> "$GITHUB_ENV"
+          echo "DEVKITPPC=$DK/devkitPPC" >> "$GITHUB_ENV"
+          echo "$DK/devkitPPC/bin" >> "$GITHUB_PATH"
+          echo "$DK/tools/bin" >> "$GITHUB_PATH"
+          ls "$DK" || true
+          ls "$DK/devkitPPC/bin" | head -5 || true
+
       # Busca el codigo del sm64-port: en la raiz del repo, en una subcarpeta,
       # dentro de un .zip subido al repo, o (si no hay nada) lo descarga de GitHub.
       - name: Preparar codigo fuente del sm64-port
@@ -58,7 +68,10 @@ jobs:
 
       - name: Compilar (no necesita la ROM)
         working-directory: ${{ env.SRC }}
-        run: make -j"$(nproc)" TARGET_WII=1 VERSION=us
+        run: |
+          which powerpc-eabi-gcc elf2dol
+          powerpc-eabi-gcc --version | head -1
+          make -j"$(nproc)" TARGET_WII=1 VERSION=us
 
       - name: Empaquetar apps/sm64wii
         working-directory: ${{ env.SRC }}
