@@ -27,8 +27,7 @@ This project is not affiliated with or endorsed by Nintendo.
 
 ## Installation
 
-1. Download `sm64wii.zip` from the latest successful run of the **Build SM64 Wii (homebrew)** workflow
-   (GitHub → Actions → open the run → *Artifacts*).
+1. Download `sm64wii.zip` from the [latest release](../../releases/latest) (the **Releases** section of this repository).
 2. Unzip it and copy the `apps/sm64wii` folder to the `apps` folder at the root of your SD card (or USB drive).
 3. Put your US ROM in `apps/sm64wii/sm64/`. Any file name works, and `.z64`, `.v64` and `.n64` are all accepted (the ROM must be 8 MB).
 4. Launch **Super Mario 64 Wii** from the Homebrew Channel.
@@ -71,7 +70,8 @@ To force a language, create a `lang.txt` file next to `boot.dol` containing `en`
 ### With GitHub Actions (no local setup)
 
 The workflow in `.github/workflows` builds the app inside the `devkitpro/devkitppc` container and
-uploads `sm64wii.zip` as an artifact. No ROM is needed to build.
+publishes `sm64wii.zip` in the `latest` release (it is also attached to the workflow run as an artifact).
+No ROM is needed to build.
 
 ### Locally
 
