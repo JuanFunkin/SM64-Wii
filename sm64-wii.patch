@@ -176,10 +176,10 @@ index cfac1e8..6c8a4eb 100644
  .PHONY: all clean distclean default diff test load libultra
 diff --git a/README_WII.md b/README_WII.md
 new file mode 100644
-index 0000000..c6623e2
+index 0000000..bc11bf3
 --- /dev/null
 +++ b/README_WII.md
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,35 @@
 +# Super Mario 64 para Wii (homebrew) - basado en sm64-port
 +
 +## Como compilar (GitHub)
@@ -195,6 +195,10 @@ index 0000000..c6623e2
 +
 +Primer arranque: barra "Leyendo ROM" -> "Compilando" (extrae texturas, skyboxes, sonido) -> "Cargando" -> juego.
 +Siguientes arranques: solo "Cargando".
++
++## Idioma / Language
++Ingles por defecto; espanol si la Wii esta en espanol. Para forzarlo crea `lang.txt` junto a boot.dol con `en` o `es`.
++English by default; Spanish if the Wii system language is Spanish. To force it, create `lang.txt` next to boot.dol containing `en` or `es`.
 +
 +## Controles
 +- Wiimote + Nunchuk: stick = mover, A = saltar, B = golpear, Z = agacharse/ground pound, C = camara (R),
@@ -1703,10 +1707,10 @@ index 0000000..6495e86
 +}
 diff --git a/src/pc/wii/wii_main.c b/src/pc/wii/wii_main.c
 new file mode 100644
-index 0000000..7733a11
+index 0000000..dfa0efc
 --- /dev/null
 +++ b/src/pc/wii/wii_main.c
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,318 @@
 +/* Punto de entrada Wii: video, SD/USB, lanzador (busca la ROM, extrae assets con barra de progreso)
 + * y luego arranca el juego (main_func de pc_main.c).
 + *
@@ -1718,6 +1722,7 @@ index 0000000..7733a11
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
++#include <dirent.h>
 +#include <sys/stat.h>
 +#include <unistd.h>
 +#include <ogc/conf.h>
@@ -1733,6 +1738,24 @@ index 0000000..7733a11
 +
 +#define ROM_SIZE_US 0x800000
 +#define TBL_ENTRY 28
++
++/* Idioma: ingles por defecto; espanol si la Wii esta en espanol, o si lang.txt dice "es" / "en". */
++static int lang_es = -1;
++static bool is_es(void) {
++    if (lang_es < 0) {
++        lang_es = CONF_GetLanguage() == CONF_LANG_SPANISH;
++        FILE *f = fopen("lang.txt", "rb");
++        if (f) {
++            char b[4] = {0};
++            fread(b, 1, 2, f);
++            fclose(f);
++            if (b[0] == 'e' && b[1] == 's') lang_es = 1;
++            if (b[0] == 'e' && b[1] == 'n') lang_es = 0;
++        }
++    }
++    return lang_es;
++}
++#define T(en, es) (is_es() ? (es) : (en))
 +
 +void wii_video_init(void) {
 +    VIDEO_Init();
@@ -1768,11 +1791,11 @@ index 0000000..7733a11
 +
 +void wii_fatal(const char *fmt, ...) {
 +    va_list ap;
-+    printf("\n\n  ERROR: ");
++    printf("%s", T("\n\n  ERROR: ", "\n\n  ERROR: "));
 +    va_start(ap, fmt);
 +    vprintf(fmt, ap);
 +    va_end(ap);
-+    printf("\n\n  Pulsa cualquier boton para salir.\n");
++    printf("%s", T("\n\n  Press any button to exit.\n", "\n\n  Pulsa cualquier boton para salir.\n"));
 +    wait_button();
 +    exit(1);
 +}
@@ -1799,6 +1822,8 @@ index 0000000..7733a11
 +    if (cur == total) { printf("\n"); last = -1; }
 +}
 +
++static void missing_table(void);
++
 +static uint32_t rd32(const uint8_t *p) { return ((uint32_t) p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]; }
 +
 +struct Ent { uint32_t kind, addr, size, addr2, src, pos, name_off; };
@@ -1807,12 +1832,12 @@ index 0000000..7733a11
 +
 +static void load_table(void) {
 +    FILE *f = fopen("assets.tbl", "rb");
-+    if (!f) wii_fatal("Falta assets.tbl junto a boot.dol (reinstala la app).");
++    if (!f) missing_table();
 +    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
 +    tbl = malloc(n);
-+    if (!tbl || fread(tbl, 1, n, f) != (size_t) n) wii_fatal("No se pudo leer assets.tbl");
++    if (!tbl || fread(tbl, 1, n, f) != (size_t) n) wii_fatal(T("Could not read assets.tbl", "No se pudo leer assets.tbl"));
 +    fclose(f);
-+    if (memcmp(tbl, "SMA2", 4) != 0) wii_fatal("assets.tbl invalido");
++    if (memcmp(tbl, "SMA2", 4) != 0) wii_fatal(T("Invalid assets.tbl", "assets.tbl invalido"));
 +    tbl_count = rd32(tbl + 4);
 +    tbl_names = (const char *) tbl + rd32(tbl + 8);
 +}
@@ -1841,28 +1866,28 @@ index 0000000..7733a11
 +static uint8_t *load_rom(size_t *len) {
 +    char path[300];
 +    if (rom_find_in_dir("sm64", path, sizeof(path)) != 0)
-+        wii_fatal("No encuentro la ROM.\n  Copia tu ROM de Super Mario 64 (US) en la carpeta\n  sm64/ junto a boot.dol (.z64, .v64 o .n64, cualquier nombre).");
++        wii_fatal(T("ROM not found.\n  Copy your Super Mario 64 (US) ROM into the sm64/ folder\n  next to boot.dol (.z64, .v64 or .n64, any file name).", "No encuentro la ROM.\n  Copia tu ROM de Super Mario 64 (US) en la carpeta\n  sm64/ junto a boot.dol (.z64, .v64 o .n64, cualquier nombre)."));
 +    printf("  ROM: %s\n", path);
 +    FILE *f = fopen(path, "rb");
-+    if (!f) wii_fatal("No se pudo abrir la ROM.");
++    if (!f) wii_fatal(T("Could not open the ROM.", "No se pudo abrir la ROM."));
 +    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-+    if (n != ROM_SIZE_US) wii_fatal("La ROM debe medir 8 MB (US). Tamano: %ld bytes.", n);
++    if (n != ROM_SIZE_US) wii_fatal(T("The ROM must be 8 MB (US). Size: %ld bytes.", "La ROM debe medir 8 MB (US). Tamano: %ld bytes."), n);
 +    uint8_t *rom = memalign(32, n);
-+    if (!rom) wii_fatal("Sin memoria para la ROM.");
++    if (!rom) wii_fatal(T("Out of memory for the ROM.", "Sin memoria para la ROM."));
 +    size_t got = 0;
 +    while (got < (size_t) n) {                       /* lectura por trozos para mostrar progreso */
 +        size_t c = fread(rom + got, 1, 256 * 1024, f);
 +        if (c == 0) break;
 +        got += c;
-+        bar("Leyendo ROM    ", (int) got, (int) n);
++        bar(T("Reading ROM    ", "Leyendo ROM    "), (int) got, (int) n);
 +    }
 +    fclose(f);
-+    if (got != (size_t) n) wii_fatal("Error leyendo la ROM.");
++    if (got != (size_t) n) wii_fatal(T("Error reading the ROM.", "Error leyendo la ROM."));
 +    RomFormat fmt = rom_detect_format(rom);
-+    if (fmt == ROM_FMT_UNKNOWN) wii_fatal("Formato de ROM no reconocido.");
-+    if (rom_to_z64(rom, n, fmt) != 0) wii_fatal("No se pudo convertir la ROM.");
++    if (fmt == ROM_FMT_UNKNOWN) wii_fatal(T("Unrecognized ROM format.", "Formato de ROM no reconocido."));
++    if (rom_to_z64(rom, n, fmt) != 0) wii_fatal(T("Could not convert the ROM.", "No se pudo convertir la ROM."));
 +    RomRegion r = rom_detect_region(rom, n);
-+    if (r != ROM_REGION_US) wii_fatal("Esta version solo admite la ROM Super Mario 64 (US / NTSC-U).");
++    if (r != ROM_REGION_US) wii_fatal(T("Only the Super Mario 64 (US / NTSC-U) ROM is supported.", "Esta version solo admite la ROM Super Mario 64 (US / NTSC-U)."));
 +    *len = n;
 +    return rom;
 +}
@@ -1872,31 +1897,31 @@ index 0000000..7733a11
 +    size_t rlen;
 +    uint8_t *rom = load_rom(&rlen);
 +    uint8_t *blk = NULL; size_t blk_cap = 0, blk_len = 0; uint32_t blk_src = 0xFFFFFFFF;
-+    printf("\n  Preparando assets (esto solo ocurre la primera vez)...\n");
++    printf("%s", T("\n  Preparing assets (first run only)...\n", "\n  Preparando assets (esto solo ocurre la primera vez)...\n"));
 +    for (uint32_t i = 0; i < tbl_count; i++) {
 +        struct Ent e = get_ent(i);
 +        const uint8_t *data;
 +        if (e.src == 0) {
-+            if ((size_t) e.pos + e.size > rlen) wii_fatal("Entrada %u fuera de la ROM.", i);
++            if ((size_t) e.pos + e.size > rlen) wii_fatal(T("Entry %u is outside the ROM.", "Entrada %u fuera de la ROM."), i);
 +            data = rom + e.pos;
 +        } else {
 +            if (blk_src != e.src) {
 +                uint32_t out = rd32(rom + e.src + 4);
 +                if (out > blk_cap) { free(blk); blk = malloc(out); blk_cap = out; }
-+                if (!blk) wii_fatal("Sin memoria para descomprimir.");
-+                if (mio0_decode(rom + e.src, rlen - e.src, blk, blk_cap) < 0) wii_fatal("Bloque MIO0 invalido (%u).", i);
++                if (!blk) wii_fatal(T("Out of memory while decompressing.", "Sin memoria para descomprimir."));
++                if (mio0_decode(rom + e.src, rlen - e.src, blk, blk_cap) < 0) wii_fatal(T("Invalid MIO0 block (%u).", "Bloque MIO0 invalido (%u)."), i);
 +                blk_src = e.src; blk_len = out;
 +            }
-+            if ((size_t) e.pos + e.size > blk_len) wii_fatal("Entrada %u fuera del bloque.", i);
++            if ((size_t) e.pos + e.size > blk_len) wii_fatal(T("Entry %u is outside its block.", "Entrada %u fuera del bloque."), i);
 +            data = blk + e.pos;
 +        }
 +        char path[300];
 +        ent_path(&e, path, sizeof(path));
 +        mkpath(path);
 +        FILE *f = fopen(path, "wb");
-+        if (!f || fwrite(data, 1, e.size, f) != e.size) wii_fatal("No se pudo escribir %s", path);
++        if (!f || fwrite(data, 1, e.size, f) != e.size) wii_fatal(T("Could not write %s", "No se pudo escribir %s"), path);
 +        fclose(f);
-+        bar("Compilando     ", (int) i + 1, (int) tbl_count);
++        bar(T("Building        ", "Compilando     "), (int) i + 1, (int) tbl_count);
 +    }
 +    free(blk); free(rom);
 +    FILE *ok = fopen("extracted/.ok", "wb");
@@ -1905,39 +1930,87 @@ index 0000000..7733a11
 +
 +/* ---- Carga: extracted/ -> RAM del juego ---------------------------------------------- */
 +static void load_all(void) {
-+    printf("\n  Cargando juego...\n");
++    printf("%s", T("\n  Loading game...\n", "\n  Cargando juego...\n"));
 +    for (uint32_t i = 0; i < tbl_count; i++) {
 +        struct Ent e = get_ent(i);
 +        char path[300];
 +        ent_path(&e, path, sizeof(path));
 +        FILE *f = fopen(path, "rb");
-+        if (!f) wii_fatal("Falta %s (borra la carpeta extracted para regenerarla).", path);
++        if (!f) wii_fatal(T("Missing %s (delete the extracted folder to rebuild it).", "Falta %s (borra la carpeta extracted para regenerarla)."), path);
 +        if (e.kind == 0) {
-+            if (fread((void *) e.addr, 1, e.size, f) != e.size) wii_fatal("Archivo corrupto: %s", path);
++            if (fread((void *) e.addr, 1, e.size, f) != e.size) wii_fatal(T("Corrupt file: %s", "Archivo corrupto: %s"), path);
 +        } else {                                   /* skybox: mosaicos + tabla de 80 punteros */
 +            uint32_t tiles = e.size - 80 * 4;
 +            uint8_t tab[80 * 4];
 +            if (fread((void *) e.addr, 1, tiles, f) != tiles || fread(tab, 1, sizeof(tab), f) != sizeof(tab))
-+                wii_fatal("Archivo corrupto: %s", path);
++                wii_fatal(T("Corrupt file: %s", "Archivo corrupto: %s"), path);
 +            uint32_t base = rd32(tab);
 +            const uint8_t **list = (const uint8_t **) e.addr2;
 +            for (int k = 0; k < 80; k++) list[k] = (const uint8_t *) e.addr + (rd32(tab + k * 4) - base);
 +        }
 +        fclose(f);
-+        bar("Cargando       ", (int) i + 1, (int) tbl_count);
++        bar(T("Loading         ", "Cargando       "), (int) i + 1, (int) tbl_count);
 +    }
 +}
 +
-+static void goto_app_dir(const char *argv0) {
++static char tried[512];
++
++static bool has_table(const char *dir) {
++    char p[300];
++    snprintf(p, sizeof(p), "%s/assets.tbl", dir);
++    FILE *f = fopen(p, "rb");
++    if (f) { fclose(f); return true; }
++    return false;
++}
++
++static bool try_dir(const char *dir) {
++    if (strlen(tried) + strlen(dir) + 4 < sizeof(tried)) { strcat(tried, "\n    "); strcat(tried, dir); }
++    if (has_table(dir) && chdir(dir) == 0) return true;
++    return false;
++}
++
++/* Cada raiz (sd:, usb:, fat:) se recorre: raiz, apps/<cualquiera>/ */
++static bool scan_root(const char *root) {
++    char d[300];
++    snprintf(d, sizeof(d), "%s/apps", root);
++    DIR *dp = opendir(d);
++    if (dp) {
++        struct dirent *e;
++        while ((e = readdir(dp))) {
++            if (e->d_name[0] == '.') continue;
++            snprintf(d, sizeof(d), "%s/apps/%s", root, e->d_name);
++            if (try_dir(d)) { closedir(dp); return true; }
++        }
++        closedir(dp);
++    }
++    return try_dir(root);
++}
++
++static char argv0_copy[256];
++
++static bool goto_app_dir(const char *argv0) {
 +    char dir[256] = "";
-+    if (argv0 && strchr(argv0, '/')) {
++    tried[0] = 0;
++    if (argv0) snprintf(argv0_copy, sizeof(argv0_copy), "%s", argv0);
++    if (argv0 && strchr(argv0, '/')) {                 /* carpeta del boot.dol */
 +        snprintf(dir, sizeof(dir), "%s", argv0);
 +        char *s = strrchr(dir, '/');
 +        if (s) *s = 0;
++        if (try_dir(dir)) return true;
 +    }
-+    if (dir[0] && chdir(dir) == 0) return;
-+    if (chdir("sd:/apps/sm64wii") == 0) return;
-+    if (chdir("usb:/apps/sm64wii") == 0) return;
++    if (try_dir(".")) return true;                      /* carpeta de trabajo actual */
++    static const char *roots[] = { "sd:", "usb:", "fat:", "fat3:", "fat4:", "sd2:", "usb2:" };
++    for (unsigned i = 0; i < sizeof(roots) / sizeof(roots[0]); i++)
++        if (scan_root(roots[i])) return true;
++    return false;
++}
++
++static void missing_table(void) {
++    char cwd[256] = "?";
++    getcwd(cwd, sizeof(cwd));
++    wii_fatal(T("assets.tbl not found next to boot.dol.\n  argv[0]: %s\n  current dir: %s\n  looked in:%s",
++                "No encuentro assets.tbl junto a boot.dol.\n  argv[0]: %s\n  carpeta actual: %s\n  busque en:%s"),
++              argv0_copy[0] ? argv0_copy : "(none)", cwd, tried);
 +}
 +
 +int main(int argc, char **argv) {
@@ -1945,13 +2018,14 @@ index 0000000..7733a11
 +    wii_video_init();
 +    printf("\x1b[2;0H");
 +    printf("  Super Mario 64 - Wii (homebrew)\n  -------------------------------\n\n");
-+    if (!fatInitDefault()) wii_fatal("No se pudo montar la SD/USB.");
-+    goto_app_dir(argc > 0 ? argv[0] : NULL);
++    if (!fatInitDefault()) wii_fatal(T("Could not mount the SD/USB.", "No se pudo montar la SD/USB."));
++    if (!goto_app_dir(argc > 0 ? argv[0] : NULL)) missing_table();
++    lang_es = -1;   /* relee lang.txt ahora que estamos en la carpeta de la app */
 +    mkdir("sm64", 0777); mkdir("extracted", 0777); mkdir("saves", 0777);
 +    load_table();
 +    if (!assets_ready()) extract_all();
 +    load_all();
-+    printf("\n  Iniciando...\n");
++    printf("%s", T("\n  Starting...\n", "\n  Iniciando...\n"));
 +    main_func();
 +    return 0;
 +}
@@ -2178,18 +2252,193 @@ index 0000000..81d45a7
 +    elif c == "scan":
 +        a = texture_assets(load(sys.argv[2])); f = scan_sources(sys.argv[2], a)
 +        print(len(a), "texturas,", len(f), "con simbolo")
+diff --git a/wii/icon.png b/wii/icon.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..7dd2dd660b8e55dae4ffd0daae01d4f2714bb923
+GIT binary patch
+literal 8490
+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
+YzY@ll^`{Lt!T<mO07*qoM6N<$g6JuIr2qf`
+
+literal 0
+HcmV?d00001
+
 diff --git a/wii/meta.xml b/wii/meta.xml
 new file mode 100644
-index 0000000..9d75c07
+index 0000000..65de881
 --- /dev/null
 +++ b/wii/meta.xml
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 +<app version="1">
 +  <name>Super Mario 64 Wii</name>
 +  <coder>sm64-port</coder>
 +  <version>0.1</version>
-+  <release_date>20261108000000</release_date>
-+  <short_description>Super Mario 64 nativo, 2 jugadores</short_description>
-+  <long_description>Port de Super Mario 64 (sm64-port) para Wii. Pon tu ROM US en la carpeta sm64.</long_description>
++  <release_date>20261124000000</release_date>
++  <short_description>Super Mario 64 for Wii - 2 players</short_description>
++  <long_description>Native Wii port of Super Mario 64 (sm64-port) with 2-player co-op.
++Put your own Super Mario 64 (US) ROM in the sm64 folder next to boot.dol.
++Pon tu propia ROM de Super Mario 64 (US) en la carpeta sm64 junto a boot.dol.</long_description>
 +</app>
