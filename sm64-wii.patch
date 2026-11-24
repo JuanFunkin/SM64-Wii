@@ -2009,10 +2009,10 @@ index 0000000..63d7269
 +#endif
 diff --git a/tools/wii_asset_tool.py b/tools/wii_asset_tool.py
 new file mode 100644
-index 0000000..49268f5
+index 0000000..81d45a7
 --- /dev/null
 +++ b/tools/wii_asset_tool.py
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,165 @@
 +#!/usr/bin/env python3
 +"""Herramienta de assets de SM64 Wii. Se ejecuta en CI y NO necesita la ROM.
 +
@@ -2116,6 +2116,21 @@ index 0000000..49268f5
 +    d = load(repo)
 +    assets = texture_assets(d)
 +    found = scan_sources(repo, assets)
++    # Solo las texturas realmente incluidas en esta compilacion (ramas #if de otras regiones fuera):
++    # se leen de los archivos .d que genera el compilador.
++    bdir = os.path.dirname(os.path.abspath(elf))
++    rel = os.path.relpath(bdir, os.path.abspath(repo)) + "/"
++    used = set()
++    for root, _, files in os.walk(bdir):
++        for fn in files:
++            if fn.endswith(".d"):
++                txt = open(os.path.join(root, fn), errors="ignore").read().replace("\\\n", " ")
++                for tok in txt.split():
++                    if tok.endswith(".inc.c"):
++                        t = tok[len(rel):] if tok.startswith(rel) else tok
++                        used.add(t)
++    if used:
++        found = {k: v for k, v in found.items() if k in used}
 +    syms = {}
 +    for ln in subprocess.check_output([nm, elf], text=True).splitlines():
 +        p = ln.split()
