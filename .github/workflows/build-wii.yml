@@ -1,8 +1,6 @@
 name: Build SM64 Wii (homebrew)
 on:
   push:
-    tags-ignore:
-      - latest
   workflow_dispatch:
 
 permissions:
@@ -120,29 +118,3 @@ jobs:
         with:
           name: sm64wii
           path: ${{ env.SRC }}/sm64wii.zip
-
-      # Publica (o actualiza) la release "latest" con el zip: es lo que descarga todo el mundo.
-      - name: Mover la etiqueta "latest" al commit actual
-        continue-on-error: true
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f latest HEAD
-          git push -f origin refs/tags/latest
-
-      - name: Publicar release (sm64wii.zip)
-        continue-on-error: true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Super Mario 64 Wii - latest build
-          make_latest: true
-          files: ${{ env.SRC }}/sm64wii.zip
-          body: |
-            Homebrew Channel build of Super Mario 64 for Wii.
-
-            **Install:** download `sm64wii.zip`, unzip it and copy the `apps/sm64wii` folder to the `apps` folder of your SD card.
-            Put your own **US** Super Mario 64 ROM in `apps/sm64wii/sm64/` (any file name, `.z64`, `.v64` or `.n64`) and launch it from the Homebrew Channel.
-
-            No ROM or Nintendo assets are included. Built from commit ${{ github.sha }}.
