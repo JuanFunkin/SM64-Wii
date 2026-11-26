@@ -6,7 +6,7 @@
 #include "../audio/audio_api.h"
 
 #define RING_SAMPLES 16384            /* muestras estereo (4 bytes c/u) */
-#define DMA_SAMPLES 1024              /* 4096 bytes, multiplo de 32 */
+#define DMA_SAMPLES 512               /* 2048 bytes (16 ms), multiplo de 32 */
 
 static int16_t ring[RING_SAMPLES * 2];
 static volatile uint32_t rd, wr;      /* en muestras, crecen sin parar */
@@ -20,14 +20,16 @@ static void voice_cb(AESNDPB *pb, uint32_t state) {
     if (state != VOICE_STATE_STREAM) return;
     int16_t *out = (int16_t *) dma[cur];
     uint32_t avail = fill();
-    uint32_t n = avail < DMA_SAMPLES ? avail : DMA_SAMPLES;
-    for (uint32_t i = 0; i < n; i++) {
-        uint32_t p = (rd + i) % RING_SAMPLES;
-        out[i * 2] = ring[p * 2];
-        out[i * 2 + 1] = ring[p * 2 + 1];
+    if (avail >= DMA_SAMPLES) {
+        for (uint32_t i = 0; i < DMA_SAMPLES; i++) {
+            uint32_t p = (rd + i) % RING_SAMPLES;
+            out[i * 2] = ring[p * 2];
+            out[i * 2 + 1] = ring[p * 2 + 1];
+        }
+        rd += DMA_SAMPLES;
+    } else {
+        memset(out, 0, DMA_SAMPLES * 4);   /* sin datos suficientes: silencio, sin consumir (evita cortes a medias) */
     }
-    if (n < DMA_SAMPLES) memset(out + n * 2, 0, (DMA_SAMPLES - n) * 4);
-    rd += n;
     DCFlushRange(out, DMA_SAMPLES * 4);
     AESND_SetVoiceBuffer(pb, out, DMA_SAMPLES * 4);
     cur ^= 1;
@@ -55,7 +57,8 @@ static bool wii_audio_init(void) {
 }
 
 static int wii_audio_buffered(void) { return (int) fill(); }
-static int wii_audio_desired(void) { return 1100; }
+static int wii_audio_desired(void) { return 2200; }
+int wii_audio_fill(void) { return (int) fill(); }
 
 static void wii_audio_play(const uint8_t *buf, size_t len) {
     const int16_t *s = (const int16_t *) buf;

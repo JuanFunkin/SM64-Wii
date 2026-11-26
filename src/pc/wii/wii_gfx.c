@@ -362,7 +362,7 @@ static void load_projection(bool ortho) {
         /* x' = x, y' = y, z' = e*Z + f, w' = -Z   (Z = -w) */
         float n = PERSP_NEAR, f = PERSP_FAR;
         m[0][0] = 1.0f; m[1][1] = 1.0f;
-        m[2][2] = -f / (f - n);
+        m[2][2] = -n / (f - n);          /* GX recorta z' en [-w', 0]: cerca = -1, lejos = 0 */
         m[2][3] = -(f * n) / (f - n);
         m[3][2] = -1.0f;
         GX_LoadProjectionMtx(m, GX_PERSPECTIVE);
@@ -400,7 +400,7 @@ static void draw_triangles(float buf[], size_t len, size_t num_tris) {
     GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16) nv);
     for (size_t i = 0; i < nv; i++) {
         const float *v = buf + i * nf;
-        if (ortho) GX_Position3f32(v[0], v[1], -(v[2] * 0.5f + 0.5f));
+        if (ortho) GX_Position3f32(v[0], v[1], -(0.001f + 0.998f * (v[2] * 0.5f + 0.5f)));
         else       GX_Position3f32(v[0], v[1], -v[3]);
         if (cfg.chan0_in >= 0) {
             const float *c = v + p->off_in[cfg.chan0_in];
@@ -492,9 +492,12 @@ static void wm_swap_begin(void) {
     GX_CopyDisp(wii_xfb[fb_index], GX_TRUE);
 }
 static void wm_swap_end(void) {
+    GX_Flush();
     VIDEO_SetNextFramebuffer(wii_xfb[fb_index]);
     VIDEO_Flush();
     VIDEO_WaitVSync();
+    /* el audio marca el ritmo: si hay demasiado sonido en cola, espera */
+    for (int i = 0; i < 6 && wii_audio_fill() > 4400; i++) VIDEO_WaitVSync();
 }
 static double wm_get_time(void) { return (double) ticks_to_millisecs(gettime()) / 1000.0; }
 

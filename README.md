@@ -70,8 +70,8 @@ To force a language, create a `lang.txt` file next to `boot.dol` containing `en`
 ### With GitHub Actions (no local setup)
 
 The workflow in `.github/workflows` builds the app inside the `devkitpro/devkitppc` container and
-publishes `sm64wii.zip` in the `latest` release (it is also attached to the workflow run as an artifact).
-No ROM is needed to build.
+uploads `sm64wii.zip` as an artifact of the workflow run (GitHub → Actions → open the run → *Artifacts*, login required).
+Releases are published manually by the maintainer. No ROM is needed to build.
 
 ### Locally
 
@@ -102,7 +102,20 @@ No ROM is needed to build.
   (for example `sd:/apps/sm64wii/`). The error screen lists where the app looked.
 - **"ROM not found"**: put the ROM in the `sm64` folder next to `boot.dol`. It must be the US version and 8 MB.
 - **Extraction looks broken or incomplete**: delete the `extracted` folder to force a rebuild on the next launch.
-- **Dolphin**: when you open a `.dol` directly, Dolphin only sees its emulated SD card, so the app folder must be inside that virtual SD.
+- **Running in Dolphin**: see [Dolphin](#dolphin) below.
+
+## Dolphin
+
+If you open `boot.dol` directly in Dolphin, the app can only see Dolphin's *emulated SD card*, not the folders of your PC.
+The error screen will then list other apps from that virtual SD and no `sm64wii`. To fix it:
+
+1. In Dolphin open **Config → Wii** and, in the SD card section, enable **Insert SD Card** and **Allow Writes to SD Card**
+   (the app needs to write `extracted` and `saves`).
+2. Enable **Automatically sync with folder** and choose a folder on your PC (recent Dolphin versions; they can also convert an existing `sd.raw` to a folder).
+3. Copy `apps/sm64wii` into that folder, so you end up with `<folder>/apps/sm64wii/boot.dol`, `assets.tbl` and your ROM in `sm64/`.
+4. Start the `boot.dol` (File → Open) or launch it from the Homebrew Channel installed in Dolphin.
+
+Dolphin does not pass the app's path when a `.dol` is opened directly, so the app searches `sd:/apps/*` for the folder containing `assets.tbl`.
 
 ## Known limitations
 
