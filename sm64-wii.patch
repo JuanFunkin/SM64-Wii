@@ -175,10 +175,10 @@ index cfac1e8..6c8a4eb 100644
  
  .PHONY: all clean distclean default diff test load libultra
 diff --git a/README.md b/README.md
-index 49644e2..060e3a6 100644
+index 49644e2..8f1a9e3 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,88 +1,121 @@
+@@ -1,88 +1,134 @@
 -# Super Mario 64 Port
 -
 -- This repo contains a full decompilation of Super Mario 64 (J), (U), (E), and (SH).
@@ -339,8 +339,8 @@ index 49644e2..060e3a6 100644
 +### With GitHub Actions (no local setup)
 +
 +The workflow in `.github/workflows` builds the app inside the `devkitpro/devkitppc` container and
-+publishes `sm64wii.zip` in the `latest` release (it is also attached to the workflow run as an artifact).
-+No ROM is needed to build.
++uploads `sm64wii.zip` as an artifact of the workflow run (GitHub → Actions → open the run → *Artifacts*, login required).
++Releases are published manually by the maintainer. No ROM is needed to build.
 +
 +### Locally
 +
@@ -371,7 +371,20 @@ index 49644e2..060e3a6 100644
 +  (for example `sd:/apps/sm64wii/`). The error screen lists where the app looked.
 +- **"ROM not found"**: put the ROM in the `sm64` folder next to `boot.dol`. It must be the US version and 8 MB.
 +- **Extraction looks broken or incomplete**: delete the `extracted` folder to force a rebuild on the next launch.
-+- **Dolphin**: when you open a `.dol` directly, Dolphin only sees its emulated SD card, so the app folder must be inside that virtual SD.
++- **Running in Dolphin**: see [Dolphin](#dolphin) below.
++
++## Dolphin
++
++If you open `boot.dol` directly in Dolphin, the app can only see Dolphin's *emulated SD card*, not the folders of your PC.
++The error screen will then list other apps from that virtual SD and no `sm64wii`. To fix it:
++
++1. In Dolphin open **Config → Wii** and, in the SD card section, enable **Insert SD Card** and **Allow Writes to SD Card**
++   (the app needs to write `extracted` and `saves`).
++2. Enable **Automatically sync with folder** and choose a folder on your PC (recent Dolphin versions; they can also convert an existing `sd.raw` to a folder).
++3. Copy `apps/sm64wii` into that folder, so you end up with `<folder>/apps/sm64wii/boot.dol`, `assets.tbl` and your ROM in `sm64/`.
++4. Start the `boot.dol` (File → Open) or launch it from the Homebrew Channel installed in Dolphin.
++
++Dolphin does not pass the app's path when a `.dol` is opened directly, so the app searches `sd:/apps/*` for the folder containing `assets.tbl`.
 +
 +## Known limitations
 +
@@ -1259,10 +1272,10 @@ index 0000000..5672c29
 +#endif
 diff --git a/src/pc/wii/wii_audio.c b/src/pc/wii/wii_audio.c
 new file mode 100644
-index 0000000..f180d63
+index 0000000..b2d9c2b
 --- /dev/null
 +++ b/src/pc/wii/wii_audio.c
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,75 @@
 +/* Audio Wii (AESND).  El juego produce PCM estereo s16 a 32 kHz; lo guardamos en un anillo y AESND lo consume. */
 +#include <gccore.h>
 +#include <aesndlib.h>
@@ -1271,7 +1284,7 @@ index 0000000..f180d63
 +#include "../audio/audio_api.h"
 +
 +#define RING_SAMPLES 16384            /* muestras estereo (4 bytes c/u) */
-+#define DMA_SAMPLES 1024              /* 4096 bytes, multiplo de 32 */
++#define DMA_SAMPLES 512               /* 2048 bytes (16 ms), multiplo de 32 */
 +
 +static int16_t ring[RING_SAMPLES * 2];
 +static volatile uint32_t rd, wr;      /* en muestras, crecen sin parar */
@@ -1285,14 +1298,16 @@ index 0000000..f180d63
 +    if (state != VOICE_STATE_STREAM) return;
 +    int16_t *out = (int16_t *) dma[cur];
 +    uint32_t avail = fill();
-+    uint32_t n = avail < DMA_SAMPLES ? avail : DMA_SAMPLES;
-+    for (uint32_t i = 0; i < n; i++) {
-+        uint32_t p = (rd + i) % RING_SAMPLES;
-+        out[i * 2] = ring[p * 2];
-+        out[i * 2 + 1] = ring[p * 2 + 1];
++    if (avail >= DMA_SAMPLES) {
++        for (uint32_t i = 0; i < DMA_SAMPLES; i++) {
++            uint32_t p = (rd + i) % RING_SAMPLES;
++            out[i * 2] = ring[p * 2];
++            out[i * 2 + 1] = ring[p * 2 + 1];
++        }
++        rd += DMA_SAMPLES;
++    } else {
++        memset(out, 0, DMA_SAMPLES * 4);   /* sin datos suficientes: silencio, sin consumir (evita cortes a medias) */
 +    }
-+    if (n < DMA_SAMPLES) memset(out + n * 2, 0, (DMA_SAMPLES - n) * 4);
-+    rd += n;
 +    DCFlushRange(out, DMA_SAMPLES * 4);
 +    AESND_SetVoiceBuffer(pb, out, DMA_SAMPLES * 4);
 +    cur ^= 1;
@@ -1320,7 +1335,8 @@ index 0000000..f180d63
 +}
 +
 +static int wii_audio_buffered(void) { return (int) fill(); }
-+static int wii_audio_desired(void) { return 1100; }
++static int wii_audio_desired(void) { return 2200; }
++int wii_audio_fill(void) { return (int) fill(); }
 +
 +static void wii_audio_play(const uint8_t *buf, size_t len) {
 +    const int16_t *s = (const int16_t *) buf;
@@ -1337,10 +1353,10 @@ index 0000000..f180d63
 +struct AudioAPI audio_wii = { wii_audio_init, wii_audio_buffered, wii_audio_desired, wii_audio_play };
 diff --git a/src/pc/wii/wii_gfx.c b/src/pc/wii/wii_gfx.c
 new file mode 100644
-index 0000000..1a89db9
+index 0000000..9fdf0a1
 --- /dev/null
 +++ b/src/pc/wii/wii_gfx.c
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,507 @@
 +/* Backend de video GX (Wii) para el sm64-port.
 + * gfx_pc.c entrega vertices ya transformados a espacio "clip" (x,y,z,w).  Aqui los pasamos a GX como
 + * (x, y, -w) con una proyeccion perspectiva personalizada (w' = -z) para que GX haga la division por w,
@@ -1705,7 +1721,7 @@ index 0000000..1a89db9
 +        /* x' = x, y' = y, z' = e*Z + f, w' = -Z   (Z = -w) */
 +        float n = PERSP_NEAR, f = PERSP_FAR;
 +        m[0][0] = 1.0f; m[1][1] = 1.0f;
-+        m[2][2] = -f / (f - n);
++        m[2][2] = -n / (f - n);          /* GX recorta z' en [-w', 0]: cerca = -1, lejos = 0 */
 +        m[2][3] = -(f * n) / (f - n);
 +        m[3][2] = -1.0f;
 +        GX_LoadProjectionMtx(m, GX_PERSPECTIVE);
@@ -1743,7 +1759,7 @@ index 0000000..1a89db9
 +    GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16) nv);
 +    for (size_t i = 0; i < nv; i++) {
 +        const float *v = buf + i * nf;
-+        if (ortho) GX_Position3f32(v[0], v[1], -(v[2] * 0.5f + 0.5f));
++        if (ortho) GX_Position3f32(v[0], v[1], -(0.001f + 0.998f * (v[2] * 0.5f + 0.5f)));
 +        else       GX_Position3f32(v[0], v[1], -v[3]);
 +        if (cfg.chan0_in >= 0) {
 +            const float *c = v + p->off_in[cfg.chan0_in];
@@ -1835,9 +1851,12 @@ index 0000000..1a89db9
 +    GX_CopyDisp(wii_xfb[fb_index], GX_TRUE);
 +}
 +static void wm_swap_end(void) {
++    GX_Flush();
 +    VIDEO_SetNextFramebuffer(wii_xfb[fb_index]);
 +    VIDEO_Flush();
 +    VIDEO_WaitVSync();
++    /* el audio marca el ritmo: si hay demasiado sonido en cola, espera */
++    for (int i = 0; i < 6 && wii_audio_fill() > 4400; i++) VIDEO_WaitVSync();
 +}
 +static double wm_get_time(void) { return (double) ticks_to_millisecs(gettime()) / 1000.0; }
 +
@@ -2298,10 +2317,10 @@ index 0000000..dfa0efc
 +}
 diff --git a/src/pc/wii/wii_platform.h b/src/pc/wii/wii_platform.h
 new file mode 100644
-index 0000000..bdd9d1c
+index 0000000..be066ac
 --- /dev/null
 +++ b/src/pc/wii/wii_platform.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +#ifndef WII_PLATFORM_H
 +#define WII_PLATFORM_H
 +/* Declaraciones compartidas de la capa Wii. Este header solo usa libogc / stdint
@@ -2321,6 +2340,7 @@ index 0000000..bdd9d1c
 +void wii_read_pad(int idx, void *pad);
 +void wii_fatal(const char *fmt, ...);
 +bool wii_home_pressed(void);
++int wii_audio_fill(void);   /* muestras de audio en cola (0 si no hay audio) */
 +
 +/* Definidos en wii_gfx.c / wii_audio.c; los usa pc_main.c */
 +struct GfxWindowManagerAPI; struct GfxRenderingAPI; struct AudioAPI;
