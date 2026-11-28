@@ -9,10 +9,10 @@ A native **Nintendo Wii** homebrew port of Super Mario 64, built on top of the
 ## Features
 
 - Runs natively on the Wii (PowerPC, GX video, AESND audio) as a Homebrew Channel app.
-- **2-player co-op** on one screen: Player 2 is a green Mario.
-  - There is a single camera that follows Player 1.
+- **2-player co-op** on one screen. Player 2 (a green Mario) only appears while a second controller (Wiimote or GameCube pad) is connected, and disappears if it is disconnected.
+  - There is a single camera that follows Player 1. Player 2 keeps walking in the direction they chose when they pressed the stick, even if the camera turns.
   - If Player 2 gets too far away, falls into a pit or dies, they are teleported back to Player 1.
-  - Player 2 can collect stars (the level ends for both players), open doors, use warps/pipes and paintings, just like Player 1.
+  - Player 2 can collect stars (the level ends for both players) and open doors. Pipes, warps and paintings are Player 1 only.
   - Stars, coins, keys and lives are shared.
 - **Full-screen widescreen**: fills 16:9 TVs without black bars and without stretching (the field of view is widened instead).
 - **No assets are included.** On first launch the app reads *your own* ROM and extracts what it needs into the `extracted` folder, showing a progress bar. Later launches just load the extracted data.
@@ -116,6 +116,10 @@ The error screen will then list other apps from that virtual SD and no `sm64wii`
 4. Start the `boot.dol` (File → Open) or launch it from the Homebrew Channel installed in Dolphin.
 
 Dolphin does not pass the app's path when a `.dol` is opened directly, so the app searches `sd:/apps/*` for the folder containing `assets.tbl`.
+
+## Debug log
+
+To help with bug reports, create an empty file named `debug.txt` next to `boot.dol`. The app then writes `log.txt` (render statistics and the draw calls of a few frames) in the same folder.
 
 ## Known limitations
 

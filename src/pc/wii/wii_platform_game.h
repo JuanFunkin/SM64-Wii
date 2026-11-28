@@ -4,6 +4,7 @@
 void wii_input_init(void);
 void wii_input_poll(void);
 void wii_read_pad(int idx, void *pad);
+int wii_player_connected(int idx);
 void wii_video_init(void);
 extern struct GfxWindowManagerAPI gfx_wii_wm;
 extern struct GfxRenderingAPI gfx_wii_rapi;

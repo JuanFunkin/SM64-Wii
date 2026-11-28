@@ -1291,6 +1291,11 @@ void update_mario_button_inputs(struct MarioState *m) {
 /**
  * Updates the joystick intended magnitude.
  */
+#ifdef TARGET_WII
+s16 wii_move_yaw(struct MarioState *m);
+void wii_move_yaw_release(struct MarioState *m);
+#endif
+
 void update_mario_joystick_inputs(struct MarioState *m) {
     struct Controller *controller = m->controller;
     f32 mag = ((controller->stickMag / 64.0f) * (controller->stickMag / 64.0f)) * 64.0f;
@@ -1302,10 +1307,17 @@ void update_mario_joystick_inputs(struct MarioState *m) {
     }
 
     if (m->intendedMag > 0.0f) {
+#ifdef TARGET_WII
+        m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + wii_move_yaw(m);
+#else
         m->intendedYaw = atan2s(-controller->stickY, controller->stickX) + m->area->camera->yaw;
+#endif
         m->input |= INPUT_NONZERO_ANALOG;
     } else {
         m->intendedYaw = m->faceAngle[1];
+#ifdef TARGET_WII
+        wii_move_yaw_release(m);
+#endif
     }
 }
 
@@ -1699,11 +1711,53 @@ void func_sh_8025574C(void) {
  */
 #ifdef TARGET_WII
 void wii_player2_spawn(void);
-void initiate_painting_warp(void);
+int wii_player_connected(int idx);
 extern struct DmaHandlerList gMarioAnimsBuf2;
 extern int gWiiPlayer2Active;
 #define WII_P2_MAX_DIST 5000.0f   /* si J2 se aleja mas, se teletransporta a J1 */
 #define WII_P2_MAX_DY 3500.0f
+
+/* J2 se mueve con la direccion de camara que habia al soltar el stick (no gira con la camara de J1) */
+static s16 sWiiP2YawLatch;
+static s32 sWiiP2YawLatchValid;
+
+s16 wii_move_yaw(struct MarioState *m) {
+    if (m != &gMarioStates[1]) {
+        return m->area->camera->yaw;
+    }
+    if (!sWiiP2YawLatchValid) {
+        sWiiP2YawLatch = m->area->camera->yaw;
+        sWiiP2YawLatchValid = 1;
+    }
+    return sWiiP2YawLatch;
+}
+
+void wii_move_yaw_release(struct MarioState *m) {
+    if (m == &gMarioStates[1]) {
+        sWiiP2YawLatch = m->area->camera->yaw;
+        sWiiP2YawLatchValid = 1;
+    }
+}
+
+static s32 wii_p2_active(void) {
+    struct MarioState *m = &gMarioStates[1];
+    return m->marioObj != NULL && m->marioObj != gMarioObject
+           && m->marioObj->activeFlags != ACTIVE_FLAG_DEACTIVATED;
+}
+
+static void wii_p2_filter_interactions(struct Object *o) {
+    /* J2 no entra a tubos ni warps de objeto (las estrellas y las puertas si) */
+    const u32 mask = INTERACT_WARP;
+    s32 i, j = 0;
+    for (i = 0; i < o->numCollidedObjs; i++) {
+        struct Object *c = o->collidedObjs[i];
+        if (c != NULL && (c->oInteractType & mask)) {
+            continue;
+        }
+        o->collidedObjs[j++] = c;
+    }
+    o->numCollidedObjs = j;
+}
 
 static void wii_p2_teleport(void) {
     struct MarioState *p1 = &gMarioStates[0];
@@ -1746,7 +1800,7 @@ static void wii_p2_post_update(void) {
         return;
     }
     if (p2->action & ACT_FLAG_INTANGIBLE) {
-        return;              /* baile de estrella, puertas, tuneles: no interrumpir */
+        return;              /* baile de estrella, puertas: no interrumpir */
     }
     if (p2->floor == NULL || dist > WII_P2_MAX_DIST || dy > WII_P2_MAX_DY || dy < -WII_P2_MAX_DY) {
         wii_p2_teleport();
@@ -1758,10 +1812,7 @@ void wii_player2_spawn(void) {
     struct MarioState *m = &gMarioStates[1];
     struct Object *o;
 
-    /* warp dentro de la misma area: el objeto de J2 sigue vivo, solo se recoloca junto a J1 */
-    if (m->marioObj != NULL && m->marioObj != gMarioObject
-        && m->marioObj->activeFlags != ACTIVE_FLAG_DEACTIVATED
-        && m->marioObj->behavior == segmented_to_virtual(bhvMario)) {
+    if (wii_p2_active()) {   /* warp dentro de la misma area: solo se recoloca junto a J1 */
         wii_p2_teleport();
         return;
     }
@@ -1788,6 +1839,23 @@ void wii_player2_spawn(void) {
     o->oMoveAngleYaw = m->faceAngle[1];
     vec3f_copy(o->header.gfx.pos, m->pos);
     vec3s_set(o->header.gfx.angle, 0, m->faceAngle[1], 0);
+    sWiiP2YawLatchValid = 0;
+}
+
+/* Mario 2 existe solo mientras haya un segundo mando conectado */
+static void wii_player2_sync(void) {
+    struct MarioState *m = &gMarioStates[1];
+    s32 want = wii_player_connected(1);
+    s32 have = wii_p2_active();
+
+    if (want && !have) {
+        wii_player2_spawn();
+    } else if (!want) {
+        if (have) {
+            obj_mark_for_deletion(m->marioObj);
+        }
+        m->marioObj = NULL;
+    }
 }
 
 static s32 execute_mario_action_inner(UNUSED struct Object *o);
@@ -1800,11 +1868,15 @@ s32 execute_mario_action(struct Object *o) {
     s16 savedCamFlags;
     s32 result;
 
-    if (o == gMarioObject || p2->marioObj != o) {
+    if (o == gMarioObject) {
+        wii_player2_sync();
+        return execute_mario_action_inner(o);
+    }
+    if (p2->marioObj != o) {
         return execute_mario_action_inner(o);
     }
 
-    /* Jugador 2: misma logica que J1 (estrellas, puertas, tuneles, pinturas) con su propio estado.
+    /* Jugador 2: misma logica que J1 (estrellas y puertas) con su propio estado.
        Estrellas, monedas, llaves y vidas se comparten con J1. La camara solo la controla J1. */
     p2->numStars = p1->numStars;
     p2->numKeys = p1->numKeys;
@@ -1818,11 +1890,9 @@ s32 execute_mario_action(struct Object *o) {
     gMarioState = p2;
     gMarioObject = o;
     gWiiPlayer2Active = 1;
+    wii_p2_filter_interactions(o);
 
     result = execute_mario_action_inner(o);
-    if (p1->action != ACT_DISAPPEARED) {
-        initiate_painting_warp();
-    }
 
     gWiiPlayer2Active = 0;
     gMarioObject = savedObj;
@@ -2015,7 +2085,7 @@ void init_mario(void) {
     }
 
 #ifdef TARGET_WII
-    wii_player2_spawn();
+    wii_player2_sync();
 #endif
 }
 

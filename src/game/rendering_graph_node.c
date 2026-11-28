@@ -187,6 +187,18 @@ static void geo_append_display_list(void *displayList, s16 layer) {
             alloc_only_pool_alloc(gDisplayListHeap, sizeof(struct DisplayListNode));
 
         listNode->transform = gMatStackFixed[gMatStackIndex];
+#ifdef TARGET_WII
+        if (gWiiGfxPlayer) {
+            /* Mario 2: cada parte se envuelve con marcas que activan el tinte verde solo para ella */
+            Gfx *wrap = alloc_display_list(4 * sizeof(Gfx));
+            Gfx *g = wrap;
+            gDPNoOpTag(g++, 0x5632A001);
+            gSPDisplayList(g++, displayList);
+            gDPNoOpTag(g++, 0x5632A000);
+            gSPEndDisplayList(g);
+            displayList = wrap;
+        }
+#endif
         listNode->displayList = displayList;
         listNode->next = 0;
         if (gCurGraphNodeMasterList->listHeads[layer] == 0) {
@@ -846,15 +858,9 @@ static void geo_process_object(struct Object *node) {
                 node->header.gfx.sharedChild->parent = &node->header.gfx.node;
 #ifdef TARGET_WII
                 gWiiGfxPlayer = (node != gMarioObject && node == gMarioStates[1].marioObj) ? 1 : 0;
-                if (gWiiGfxPlayer) {
-                    gDPNoOpTag(gDisplayListHead++, 0x5632A001);   /* inicio color verde */
-                }
 #endif
                 geo_process_node_and_siblings(node->header.gfx.sharedChild);
 #ifdef TARGET_WII
-                if (gWiiGfxPlayer) {
-                    gDPNoOpTag(gDisplayListHead++, 0x5632A000);   /* fin color verde */
-                }
                 gWiiGfxPlayer = 0;
 #endif
                 node->header.gfx.sharedChild->parent = NULL;

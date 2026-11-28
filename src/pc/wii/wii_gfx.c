@@ -83,15 +83,25 @@ static uint32_t new_texture(void) {
 
 static void select_texture(int tile, uint32_t id) { cur_tile = tile; cur_tex[tile] = id; }
 
+#define MAX_GARBAGE 4096
+static void *garbage[MAX_GARBAGE];
+static int num_garbage;
+
 static void upload_texture(const uint8_t *rgba, int w, int h) {
     struct WiiTex *t = &textures[cur_tex[cur_tile]];
     int pw = (w + 3) & ~3, ph = (h + 3) & ~3;
     size_t size = (size_t) pw * ph * 4;
-    if (t->data == NULL || (size_t) t->w * t->h * 4 != size) {
-        free(t->data);
-        t->data = memalign(32, (size + 31) & ~31);
-        if (!t->data) return;
+    if (t->data != NULL) {   /* el buffer viejo puede seguir en la cola de GX: se libera al final del cuadro */
+        if (num_garbage < MAX_GARBAGE) {
+            garbage[num_garbage++] = t->data;
+        } else {
+            GX_DrawDone();
+            free(t->data);
+        }
+        t->data = NULL;
     }
+    t->data = memalign(32, (size + 31) & ~31);
+    if (!t->data) return;
     t->w = pw; t->h = ph;
     for (int by = 0; by < ph / 4; by++) {
         for (int bx = 0; bx < pw / 4; bx++) {
@@ -369,6 +379,32 @@ static void load_projection(bool ortho) {
     }
 }
 
+/* ---- depuracion: crea un archivo debug.txt junto a boot.dol para generar log.txt ---- */
+static FILE *dbg;
+static int dbg_state = -1;       /* -1 sin comprobar, 0 desactivado, 1 activo */
+static unsigned dbg_frame, dbg_draws, dbg_ortho, dbg_persp, dbg_verts;
+static long dbg_bytes;
+static bool dbg_verbose;
+
+static void dbg_open(void) {
+    FILE *f = fopen("debug.txt", "rb");
+    dbg_state = f != NULL;
+    if (f) { fclose(f); dbg = fopen("log.txt", "w"); if (!dbg) dbg_state = 0; }
+    if (dbg) fprintf(dbg, "debug log: logical %ux%u widescreen=%d\n", (unsigned) wii_logical_w, (unsigned) wii_logical_h, (int) wii_widescreen);
+}
+
+static void dbg_end_frame(void) {
+    if (dbg_state < 0) dbg_open();
+    if (dbg_state <= 0) return;
+    if ((dbg_frame % 60) == 0 && dbg_bytes < 300000)
+        dbg_bytes += fprintf(dbg, "frame %u: draws=%u ortho=%u persp=%u verts=%u\n", dbg_frame, dbg_draws, dbg_ortho, dbg_persp, dbg_verts);
+    dbg_draws = dbg_ortho = dbg_persp = dbg_verts = 0;
+    dbg_frame++;
+    dbg_verbose = (dbg_frame % 300) < 2;      /* 2 cuadros seguidos cada 10 s: detalle de cada dibujo */
+    if (dbg_verbose) dbg_bytes += fprintf(dbg, "-- detail frame %u --\n", dbg_frame);
+    if (dbg_frame % 120 == 0) fflush(dbg);
+}
+
 static inline uint8_t f2b(float v) { return v <= 0 ? 0 : v >= 1 ? 255 : (uint8_t) (v * 255.0f + 0.5f); }
 
 static void draw_triangles(float buf[], size_t len, size_t num_tris) {
@@ -380,7 +416,7 @@ static void draw_triangles(float buf[], size_t len, size_t num_tris) {
 
     /* 2D (w == 1 en todos) o 3D */
     bool ortho = true;
-    for (size_t i = 0; i < nv; i++) if (buf[i * nf + 3] != 1.0f) { ortho = false; break; }
+    for (size_t i = 0; i < nv; i++) { float w = buf[i * nf + 3]; if (w < 0.99f || w > 1.01f) { ortho = false; break; } }
 
     /* inputs que varian entre vertices */
     bool varying[4] = {false, false, false, false};
@@ -392,6 +428,14 @@ static void draw_triangles(float buf[], size_t len, size_t num_tris) {
 
     struct DrawCfg cfg;
     setup_draw(p, buf, varying, &cfg, cc->opt_texture_edge);
+    if (dbg_state > 0) {
+        dbg_draws++; dbg_verts += (unsigned) nv; if (ortho) dbg_ortho++; else dbg_persp++;
+        if (dbg_verbose && dbg_bytes < 300000)
+            dbg_bytes += fprintf(dbg, " draw %s nv=%u cc=%06x alpha=%d edge=%d fog=%d in=%d tex=%u/%u zt=%d zm=%d ua=%d p0=(%.3f %.3f %.3f %.3f)\n",
+                ortho ? "2D" : "3D", (unsigned) nv, (unsigned) p->shader_id, cc->opt_alpha, cc->opt_texture_edge, cc->opt_fog,
+                cc->num_inputs, cc->used_textures[0] ? (unsigned) cur_tex[0] : 0u, cc->used_textures[1] ? (unsigned) cur_tex[1] : 0u,
+                depth_test, depth_mask, use_alpha, buf[0], buf[1], buf[2], buf[3]);
+    }
 
     GX_SetZMode(depth_test ? GX_TRUE : GX_FALSE, GX_LEQUAL, depth_mask ? GX_TRUE : GX_FALSE);
     GX_SetCoPlanar(zmode_decal ? GX_ENABLE : GX_DISABLE);
@@ -485,14 +529,16 @@ static void wm_get_dimensions(uint32_t *w, uint32_t *h) { *w = wii_logical_w; *h
 static void wm_handle_events(void) { wii_input_poll(); if (wii_home_pressed()) exit(0); }
 static bool wm_start_frame(void) { return true; }
 static void wm_swap_begin(void) {
-    GX_DrawDone();
     fb_index ^= 1;
     GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GX_SetColorUpdate(GX_TRUE);
     GX_CopyDisp(wii_xfb[fb_index], GX_TRUE);
+    GX_DrawDone();   /* espera dibujo + copia: ya nadie usa las texturas viejas */
+    for (int i = 0; i < num_garbage; i++) free(garbage[i]);
+    num_garbage = 0;
+    dbg_end_frame();
 }
 static void wm_swap_end(void) {
-    GX_Flush();
     VIDEO_SetNextFramebuffer(wii_xfb[fb_index]);
     VIDEO_Flush();
     VIDEO_WaitVSync();

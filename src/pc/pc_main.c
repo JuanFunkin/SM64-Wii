@@ -89,8 +89,14 @@ void produce_one_frame(void) {
     int samples_left = audio_api->buffered();
     u32 num_audio_samples = samples_left < audio_api->get_desired_buffered() ? SAMPLES_HIGH : SAMPLES_LOW;
     //printf("Audio samples: %d %u\n", samples_left, num_audio_samples);
+#ifdef TARGET_WII
+    s16 audio_buffer[SAMPLES_HIGH * 2 * 3];
+    int num_bufs = samples_left < 1100 ? 3 : 2;   /* si la cola de audio se vacia, genera de mas */
+#else
     s16 audio_buffer[SAMPLES_HIGH * 2 * 2];
-    for (int i = 0; i < 2; i++) {
+    int num_bufs = 2;
+#endif
+    for (int i = 0; i < num_bufs; i++) {
         /*if (audio_cnt-- == 0) {
             audio_cnt = 2;
         }
@@ -98,7 +104,7 @@ void produce_one_frame(void) {
         create_next_audio_buffer(audio_buffer + i * (num_audio_samples * 2), num_audio_samples);
     }
     //printf("Audio samples before submitting: %d\n", audio_api->buffered());
-    audio_api->play((u8 *)audio_buffer, 2 * num_audio_samples * 4);
+    audio_api->play((u8 *)audio_buffer, num_bufs * num_audio_samples * 4);
     
     gfx_end_frame();
 }

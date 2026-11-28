@@ -17,6 +17,7 @@ void wii_input_poll(void);
 void wii_read_pad(int idx, void *pad);
 void wii_fatal(const char *fmt, ...);
 bool wii_home_pressed(void);
+int wii_player_connected(int idx);   /* 1 si hay mando para ese jugador (J1 siempre) */
 int wii_audio_fill(void);   /* muestras de audio en cola (0 si no hay audio) */
 
 /* Definidos en wii_gfx.c / wii_audio.c; los usa pc_main.c */

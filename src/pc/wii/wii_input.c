@@ -19,6 +19,7 @@
 struct WiiPad { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; };
 
 static bool home;
+static int pad_connected[2];
 
 void wii_input_init(void) {
     WPAD_Init();
@@ -26,9 +27,15 @@ void wii_input_init(void) {
     WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
 }
 
+int wii_player_connected(int idx) { return idx == 0 ? 1 : pad_connected[idx & 1]; }
+
 void wii_input_poll(void) {
     WPAD_ScanPads();
-    PAD_ScanPads();
+    u32 gc_mask = PAD_ScanPads();
+    for (int i = 0; i < 2; i++) {
+        u32 t;
+        pad_connected[i] = (WPAD_Probe(i, &t) == WPAD_ERR_NONE) || (gc_mask & (1u << i));
+    }
     home = (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) || (WPAD_ButtonsDown(0) & WPAD_CLASSIC_BUTTON_HOME)
            || (PAD_ButtonsHeld(0) & (PAD_BUTTON_START | PAD_TRIGGER_L | PAD_TRIGGER_R)) == (PAD_BUTTON_START | PAD_TRIGGER_L | PAD_TRIGGER_R);
 }
