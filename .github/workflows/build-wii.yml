@@ -118,3 +118,14 @@ jobs:
         with:
           name: sm64wii
           path: ${{ env.SRC }}/sm64wii.zip
+
+      # Tabla de simbolos: sirve para localizar una direccion de error (por ejemplo "PC = 0x800e5950")
+      - name: Guardar simbolos
+        working-directory: ${{ env.SRC }}
+        run: powerpc-eabi-nm -n -C build/us_wii/sm64.us.elf > symbols.txt || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sm64wii-symbols
+          path: ${{ env.SRC }}/symbols.txt
+          if-no-files-found: ignore
